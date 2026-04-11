@@ -28,6 +28,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.navArgument
 import com.ysxq.app.data.auth.AuthRepository
+import com.ysxq.app.data.auth.AuthState
 import com.ysxq.app.data.local.favoritesStore
 import com.ysxq.app.data.local.userPreferences
 import com.ysxq.app.data.local.watchHistoryStore
@@ -62,6 +63,22 @@ fun AppNavHost(
                     WatchHistorySyncRepository(histStore).pullFromCloud()
                 }
             } catch (_: Exception) { }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        var wasAuthenticated = AuthRepository.isLoggedIn
+        AuthRepository.authStateChanges().collect { state ->
+            if (wasAuthenticated && state is AuthState.Unauthenticated) {
+                val current = currentRoute
+                if (current != null && current != Screen.Auth.route && current != Screen.Splash.route) {
+                    navController.navigate(Screen.Auth.route) {
+                        popUpTo(Screen.Home.route) { inclusive = false }
+                        launchSingleTop = true
+                    }
+                }
+            }
+            wasAuthenticated = state is AuthState.Authenticated
         }
     }
 

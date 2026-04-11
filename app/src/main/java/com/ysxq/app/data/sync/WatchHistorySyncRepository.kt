@@ -25,7 +25,7 @@ class WatchHistorySyncRepository(
     suspend fun upsertToCloud(entry: WatchHistoryEntry) {
         withContext(Dispatchers.IO) {
             val token = AuthRepository.getAccessToken() ?: return@withContext
-            val uid = AuthRepository.currentUser?.uid ?: return@withContext
+            val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
             try {
                 // Step 1: Query for existing record by uid + videoId
                 val existingRecord = findExistingRecord(token, uid, entry.videoId)
@@ -116,7 +116,7 @@ class WatchHistorySyncRepository(
     suspend fun deleteFromCloud(videoId: Int) {
         withContext(Dispatchers.IO) {
             val token = AuthRepository.getAccessToken() ?: return@withContext
-            val uid = AuthRepository.currentUser?.uid ?: return@withContext
+            val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
             try {
                 val filter = CloudBaseDbDeleteByFilterRequest(
                     filter = CloudBaseDbFilter(
@@ -140,7 +140,7 @@ class WatchHistorySyncRepository(
     suspend fun clearCloud() {
         withContext(Dispatchers.IO) {
             val token = AuthRepository.getAccessToken() ?: return@withContext
-            val uid = AuthRepository.currentUser?.uid ?: return@withContext
+            val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
             try {
                 val filter = CloudBaseDbDeleteByFilterRequest(
                     filter = CloudBaseDbFilter(
@@ -161,7 +161,7 @@ class WatchHistorySyncRepository(
     suspend fun pullFromCloud() {
         withContext(Dispatchers.IO) {
             val token = AuthRepository.getAccessToken() ?: return@withContext
-            val uid = AuthRepository.currentUser?.uid ?: return@withContext
+            val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
             try {
                 val response = api.list(
                     "Bearer $token",
@@ -201,9 +201,7 @@ class WatchHistorySyncRepository(
 
                 val localEntries = historyStore.history.first()
                 val merged = mergeHistory(localEntries, cloudEntries)
-                for (entry in merged) {
-                    historyStore.saveProgress(entry)
-                }
+                historyStore.replaceAll(merged)
             } catch (e: Exception) {
                 Log.w(TAG, "从云端拉取历史失败: ${e.message}")
             }

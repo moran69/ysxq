@@ -38,6 +38,20 @@ object AuthRepository {
     private val _logoutReason = MutableStateFlow<String?>(null)
     val logoutReason: Flow<String?> = _logoutReason.asStateFlow()
 
+    /**
+     * Set when session expires unexpectedly (e.g. another device logged in).
+     * Read by AuthScreen to show a message. Cleared after display.
+     */
+    @Volatile
+    var sessionExpiredMessage: String? = null
+        private set
+
+    fun consumeSessionExpiredMessage(): String? {
+        val msg = sessionExpiredMessage
+        sessionExpiredMessage = null
+        return msg
+    }
+
     fun consumeLogoutReason(): String? {
         val reason = _logoutReason.value
         _logoutReason.value = null
@@ -171,6 +185,7 @@ object AuthRepository {
             val info = response.toUserInfo()
                 ?: return Result.failure(Exception(response.getErrorMessage() ?: "获取用户信息失败"))
             val user = info.toDomainUser()
+                ?: return Result.failure(Exception("用户信息不完整（缺少uid）"))
             _currentUser.value = user
             _authState.value = AuthState.Authenticated(user)
             Result.success(user)
@@ -222,6 +237,7 @@ object AuthRepository {
         _authState.value = AuthState.Unauthenticated
         if (reason != null) {
             _logoutReason.value = reason
+            sessionExpiredMessage = reason
         }
         val app = com.ysxq.app.App.instance
         if (app != null) {
@@ -303,6 +319,7 @@ object AuthRepository {
             return Result.success(user)
         }
 
+        // uid was blank in auth response — try fetching full profile
         return fetchUserProfile()
     }
 
@@ -317,6 +334,7 @@ object AuthRepository {
             val info = response.toUserInfo()
                 ?: return Result.failure(Exception("获取用户信息失败"))
             val user = info.toDomainUser()
+                ?: return Result.failure(Exception("用户信息不完整（缺少uid）"))
             _currentUser.value = user
             _authState.value = AuthState.Authenticated(user)
             Result.success(user)
@@ -325,8 +343,9 @@ object AuthRepository {
         }
     }
 
-    private fun CloudBaseUserInfo.toDomainUser(): User {
+    private fun CloudBaseUserInfo.toDomainUser(): User? {
         val uid = sub ?: userId ?: ""
+        if (uid.isBlank()) return null
         return User(
             uid = uid,
             email = email ?: "",

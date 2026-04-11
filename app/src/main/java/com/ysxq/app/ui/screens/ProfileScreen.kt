@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
 import com.ysxq.app.data.auth.AuthState
+import com.ysxq.app.data.storage.CloudBaseStorageHelper
 import com.ysxq.app.ui.theme.*
 import com.ysxq.app.viewmodel.ProfileViewModel
 
@@ -44,6 +45,12 @@ fun ProfileScreen(
     val authState by viewModel.authState.collectAsState()
     val isGuest by viewModel.isGuest.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
+
+    val photoUrl = (authState as? AuthState.Authenticated)?.user?.photoUrl
+    var resolvedPhotoUrl by remember(photoUrl) { mutableStateOf<String?>(null) }
+    LaunchedEffect(photoUrl) {
+        resolvedPhotoUrl = CloudBaseStorageHelper.resolveAvatarUrl(photoUrl)
+    }
 
     val avatarLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -85,6 +92,7 @@ fun ProfileScreen(
             when (authState) {
                 is AuthState.Authenticated -> AuthenticatedContent(
                     viewModel = viewModel,
+                    resolvedPhotoUrl = resolvedPhotoUrl,
                     onAvatarClick = onProfileEditClick,
                     onLogoutClick = { viewModel.showLogoutDialog() },
                     onFavoritesClick = onFavoritesClick,
@@ -127,7 +135,7 @@ fun ProfileScreen(
             isUpdating = uiState.isUpdating,
             error = uiState.updateError,
             localAvatarUri = uiState.localAvatarUri,
-            fallbackAvatarUrl = uiState.user?.photoUrl,
+            fallbackAvatarUrl = resolvedPhotoUrl,
             onNicknameChange = { viewModel.onNicknameChange(it) },
             onAvatarClick = { avatarLauncher.launch("image/*") },
             onConfirm = { viewModel.updateNickname() },
@@ -139,6 +147,7 @@ fun ProfileScreen(
 @Composable
 private fun AuthenticatedContent(
     viewModel: ProfileViewModel,
+    resolvedPhotoUrl: String?,
     onAvatarClick: () -> Unit,
     onLogoutClick: () -> Unit,
     onFavoritesClick: () -> Unit,
@@ -185,9 +194,9 @@ private fun AuthenticatedContent(
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
-                } else if (!user.photoUrl.isNullOrBlank()) {
+                } else if (!resolvedPhotoUrl.isNullOrBlank()) {
                     AsyncImage(
-                        model = user.photoUrl,
+                        model = resolvedPhotoUrl,
                         contentDescription = "头像",
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
@@ -601,22 +610,12 @@ private fun EditProfileDialog(
                                 .background(SakuraPrimary.copy(alpha = 0.2f)),
                             contentAlignment = Alignment.Center
                         ) {
-                            val initial = nickname.take(1).ifBlank { "" }
-                            if (initial.isNotEmpty()) {
-                                Text(
-                                    text = initial,
-                                    color = SakuraPrimary,
-                                    fontSize = 30.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Filled.Person,
-                                    contentDescription = "头像",
-                                    tint = SakuraPrimary,
-                                    modifier = Modifier.size(36.dp)
-                                )
-                            }
+                            Icon(
+                                imageVector = Icons.Filled.Person,
+                                contentDescription = "头像",
+                                tint = SakuraPrimary,
+                                modifier = Modifier.size(36.dp)
+                            )
                         }
                     }
                     if (isUpdating) {

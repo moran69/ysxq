@@ -26,6 +26,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.ysxq.app.data.auth.AuthRepository
 import com.ysxq.app.data.auth.UiState
 import com.ysxq.app.ui.theme.*
 import com.ysxq.app.viewmodel.AuthMode
@@ -54,6 +55,13 @@ fun AuthScreen(
     LaunchedEffect(sendCodeState) {
         if (sendCodeState is UiState.Success) {
             Toast.makeText(context, "验证码已发送", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        val expiredMsg = AuthRepository.consumeSessionExpiredMessage()
+        if (expiredMsg != null) {
+            Toast.makeText(context, expiredMsg, Toast.LENGTH_LONG).show()
         }
     }
 

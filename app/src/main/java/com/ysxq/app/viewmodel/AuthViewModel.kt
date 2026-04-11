@@ -136,8 +136,12 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                     signUpResult.onSuccess { user ->
                         val nickname = generateNickname()
                         AuthRepository.updateProfile(displayName = nickname)
-                        prefs.saveUserLogin(user, AuthRepository.getAccessToken(), AuthRepository.getRefreshToken())
                         uploadDefaultAvatar(user)
+                        prefs.saveUserLogin(
+                            AuthRepository.currentUser ?: user,
+                            AuthRepository.getAccessToken(),
+                            AuthRepository.getRefreshToken()
+                        )
                         _authResultState.value = UiState.Success(user)
                     }.onFailure {
                         _authResultState.value = UiState.Error(it.message ?: "注册失败")
@@ -153,17 +157,17 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { prefs.markAsGuest() }
     }
 
-    private fun uploadDefaultAvatar(user: User) {
+    private suspend fun uploadDefaultAvatar(user: User) {
+        if (user.uid.isBlank()) return
         val app = getApplication<Application>()
-        AuthRepository.launchInBackground {
-            try {
-                val helper = CloudBaseStorageHelper(app)
-                helper.uploadDefaultAvatar(user.uid)
-                    .onSuccess { url ->
-                        AuthRepository.updateProfile(photoUri = Uri.parse(url))
-                    }
-            } catch (_: Exception) { }
-        }
+        try {
+            val helper = CloudBaseStorageHelper(app)
+            helper.uploadDefaultAvatar(user.uid)
+                .onSuccess { result ->
+                    AuthRepository.updateProfile(photoUri = Uri.parse(result.fileId))
+                    CloudBaseStorageHelper.cacheResolvedUrl(result.fileId, result.downloadUrl)
+                }
+        } catch (_: Exception) { }
     }
 
     fun clearStates() {

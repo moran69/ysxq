@@ -28,6 +28,7 @@ import com.ysxq.app.data.sync.FavoritesSyncRepository
 import com.ysxq.app.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,6 +40,9 @@ fun FavoritesScreen(
     val favoritesStore = remember { context.favoritesStore() }
     val favoritesSyncRepo = remember { FavoritesSyncRepository(favoritesStore) }
     val favorites by favoritesStore.favorites.collectAsState(initial = emptyList())
+    val scope = rememberCoroutineScope()
+
+    var itemToDelete by remember { mutableStateOf<FavoriteItem?>(null) }
 
     LaunchedEffect(Unit) {
         favoritesSyncRepo.pullFromCloud()
@@ -81,24 +85,51 @@ fun FavoritesScreen(
                 items(favorites, key = { it.id }) { item ->
                     FavoriteItemRow(
                         item = item,
-                        onVideoClick = { onVideoClick(item.id) }
+                        onVideoClick = { onVideoClick(item.id) },
+                        onDeleteClick = { itemToDelete = item }
                     )
                 }
             }
         }
+    }
+
+    itemToDelete?.let { item ->
+        AlertDialog(
+            onDismissRequest = { itemToDelete = null },
+            title = { Text("取消收藏", color = TextPrimary) },
+            text = { Text("确定要取消收藏「${item.name}」吗？", color = TextSecondary) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        itemToDelete = null
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                favoritesStore.removeFavorite(item.id)
+                                favoritesSyncRepo.deleteFromCloud(item.id)
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = SakuraPrimary)
+                ) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { itemToDelete = null }) {
+                    Text("取消", color = TextTertiary)
+                }
+            },
+            containerColor = DarkSurface,
+            titleContentColor = TextPrimary,
+            textContentColor = TextSecondary
+        )
     }
 }
 
 @Composable
 private fun FavoriteItemRow(
     item: FavoriteItem,
-    onVideoClick: () -> Unit
+    onVideoClick: () -> Unit,
+    onDeleteClick: () -> Unit
 ) {
-    val context = LocalContext.current
-    val favoritesStore = remember { context.favoritesStore() }
-    val favoritesSyncRepo = remember { FavoritesSyncRepository(favoritesStore) }
-    val scope = rememberCoroutineScope()
-
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -144,12 +175,7 @@ private fun FavoriteItemRow(
                 }
             }
 
-            IconButton(onClick = {
-                scope.launch(Dispatchers.IO) {
-                    favoritesStore.removeFavorite(item.id)
-                    favoritesSyncRepo.deleteFromCloud(item.id)
-                }
-            }) {
+            IconButton(onClick = onDeleteClick) {
                 Icon(
                     Icons.Filled.Delete,
                     contentDescription = "移除",

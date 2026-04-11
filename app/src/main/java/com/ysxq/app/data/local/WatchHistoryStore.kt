@@ -64,6 +64,13 @@ class WatchHistoryStore(private val dataStore: DataStore<Preferences>) {
         }
     }
 
+    suspend fun replaceAll(entries: List<WatchHistoryEntry>) {
+        dataStore.edit { prefs ->
+            val sorted = entries.sortedByDescending { it.updatedAt }
+            prefs[KEY_HISTORY] = json.encodeToString(sorted.take(MAX_ENTRIES))
+        }
+    }
+
     suspend fun clearAll() {
         dataStore.edit { prefs ->
             prefs[KEY_HISTORY] = "[]"

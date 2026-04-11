@@ -579,6 +579,7 @@ fun DetailScreen(
             exoPlayer = exoPlayer,
             isPlaying = isPlaying,
             isBuffering = isBuffering,
+            hasMediaLoaded = hasMediaLoaded,
             showControls = showControls,
             isLocked = isLocked,
             isLongPressSpeed = isLongPressSpeed,
@@ -980,6 +981,7 @@ private fun FullscreenPlayer(
     exoPlayer: ExoPlayer,
     isPlaying: Boolean,
     isBuffering: Boolean,
+    hasMediaLoaded: Boolean,
     showControls: Boolean,
     isLocked: Boolean,
     isLongPressSpeed: Boolean,
@@ -1030,10 +1032,7 @@ private fun FullscreenPlayer(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(isLocked) {
-                    if (isLocked) {
-                        detectTapGestures { onToggleControls() }
-                        return@pointerInput
-                    }
+                    if (isLocked) return@pointerInput
                     detectDragGestures(
                         onDragStart = { _ ->
                             gestureVolume = exoPlayer.volume
@@ -1070,7 +1069,6 @@ private fun FullscreenPlayer(
                     )
                 }
                 .pointerInput(Unit) {
-                    if (isLocked) return@pointerInput
                     awaitEachGesture {
                         awaitFirstDown(requireUnconsumed = false)
                         val upBeforeTimeout = withTimeoutOrNull(500L) {
@@ -1171,8 +1169,25 @@ private fun FullscreenPlayer(
         }
 
         if (isBuffering) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = SakuraPrimary, modifier = Modifier.size(40.dp))
+            if (!hasMediaLoaded) {
+                Image(
+                    painter = painterResource(id = R.drawable.detail_background),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.3f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CuteCatLoader(modifier = Modifier.size(100.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(if (!hasMediaLoaded) "视频加载中..." else "缓冲中...", color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
+                }
             }
         }
 

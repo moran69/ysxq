@@ -24,7 +24,7 @@ class FavoritesSyncRepository(
     suspend fun upsertToCloud(item: FavoriteItem) {
         withContext(Dispatchers.IO) {
             val token = AuthRepository.getAccessToken() ?: return@withContext
-            val uid = AuthRepository.currentUser?.uid ?: return@withContext
+            val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
             try {
                 // Step 1: Query for existing record by uid + videoId
                 val existingRecord = findExistingRecord(token, uid, item.id)
@@ -111,7 +111,7 @@ class FavoritesSyncRepository(
     suspend fun deleteFromCloud(videoId: Int) {
         withContext(Dispatchers.IO) {
             val token = AuthRepository.getAccessToken() ?: return@withContext
-            val uid = AuthRepository.currentUser?.uid ?: return@withContext
+            val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
             try {
                 val filter = CloudBaseDbDeleteByFilterRequest(
                     filter = CloudBaseDbFilter(
@@ -135,7 +135,7 @@ class FavoritesSyncRepository(
     suspend fun pullFromCloud() {
         withContext(Dispatchers.IO) {
             val token = AuthRepository.getAccessToken() ?: return@withContext
-            val uid = AuthRepository.currentUser?.uid ?: return@withContext
+            val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
             try {
                 val response = api.list(
                     "Bearer $token",

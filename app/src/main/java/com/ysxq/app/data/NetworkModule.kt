@@ -4,6 +4,7 @@ import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFact
 import com.ysxq.app.data.auth.AuthRepository
 import com.ysxq.app.data.auth.CloudBaseAuthApi
 import com.ysxq.app.data.database.CloudBaseDatabaseApi
+import com.ysxq.app.data.storage.CloudBaseStorageApi
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -113,5 +114,12 @@ object NetworkModule {
         .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
         .build()
         .create(CloudBaseDatabaseApi::class.java)
+
+    val cloudBaseStorageService: CloudBaseStorageApi = Retrofit.Builder()
+        .baseUrl(CLOUDBASE_BASE_URL)
+        .client(cloudBaseOkHttpClient)
+        .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+        .build()
+        .create(CloudBaseStorageApi::class.java)
 
 }

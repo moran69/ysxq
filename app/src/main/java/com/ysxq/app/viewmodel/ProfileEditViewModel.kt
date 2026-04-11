@@ -8,6 +8,7 @@ import com.ysxq.app.data.auth.AuthRepository
 import com.ysxq.app.data.auth.AuthState
 import com.ysxq.app.data.auth.User
 import com.ysxq.app.data.local.userPreferences
+import com.ysxq.app.data.storage.AvatarUploadResult
 import com.ysxq.app.data.storage.CloudBaseStorageHelper
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -38,17 +39,29 @@ class ProfileEditViewModel(application: Application) : AndroidViewModel(applicat
     private val _uiState = MutableStateFlow(ProfileEditUiState())
     val uiState: StateFlow<ProfileEditUiState> = _uiState.asStateFlow()
 
+    @Volatile
+    private var avatarUploadInProgress = false
+
     init {
         viewModelScope.launch {
             authState.collect { state ->
                 when (state) {
                     is AuthState.Authenticated -> {
                         val user = state.user
-                        _uiState.value = _uiState.value.copy(
-                            user = user,
-                            editNickname = user.displayName,
-                            cloudAvatarUrl = user.photoUrl
-                        )
+                        if (avatarUploadInProgress) {
+                            // Don't overwrite cloudAvatarUrl while upload is finishing
+                            _uiState.value = _uiState.value.copy(
+                                user = user,
+                                editNickname = user.displayName
+                            )
+                        } else {
+                            val resolvedUrl = CloudBaseStorageHelper.resolveAvatarUrl(user.photoUrl)
+                            _uiState.value = _uiState.value.copy(
+                                user = user,
+                                editNickname = user.displayName,
+                                cloudAvatarUrl = resolvedUrl
+                            )
+                        }
                     }
                     AuthState.Unauthenticated -> {
                         _uiState.value = _uiState.value.copy(user = null)
@@ -74,31 +87,36 @@ class ProfileEditViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     private fun uploadAvatarToCloud(uri: Uri) {
-        val uid = AuthRepository.currentUser?.uid ?: return
+        val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return
         viewModelScope.launch {
+            avatarUploadInProgress = true
             _uiState.value = _uiState.value.copy(isUploadingAvatar = true, error = null)
             val result = storageHelper.uploadAvatar(uri, uid)
             if (result.isSuccess) {
-                val downloadUrl = result.getOrNull() ?: return@launch
-                val updateResult = AuthRepository.updateProfile(photoUri = Uri.parse(downloadUrl))
+                val uploadResult = result.getOrNull() ?: return@launch
+                val updateResult = AuthRepository.updateProfile(photoUri = Uri.parse(uploadResult.fileId))
                 if (updateResult.isSuccess) {
                     val user = updateResult.getOrNull()
                     if (user != null) {
                         prefs.saveUserLogin(user, AuthRepository.getAccessToken(), AuthRepository.getRefreshToken())
                     }
+                    CloudBaseStorageHelper.cacheResolvedUrl(uploadResult.fileId, uploadResult.downloadUrl)
+                    avatarUploadInProgress = false
                     _uiState.value = _uiState.value.copy(
-                        cloudAvatarUrl = downloadUrl,
+                        cloudAvatarUrl = uploadResult.downloadUrl,
                         isUploadingAvatar = false,
                         localAvatarUri = null
                     )
                     prefs.clearLocalAvatarUri()
                 } else {
+                    avatarUploadInProgress = false
                     _uiState.value = _uiState.value.copy(
                         isUploadingAvatar = false,
                         error = updateResult.exceptionOrNull()?.message ?: "头像上传后更新失败"
                     )
                 }
             } else {
+                avatarUploadInProgress = false
                 _uiState.value = _uiState.value.copy(
                     isUploadingAvatar = false,
                     error = result.exceptionOrNull()?.message ?: "头像上传失败"

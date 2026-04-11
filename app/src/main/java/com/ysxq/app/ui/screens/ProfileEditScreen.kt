@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil3.compose.AsyncImage
+import com.ysxq.app.data.storage.CloudBaseStorageHelper
 import com.ysxq.app.ui.theme.*
 import com.ysxq.app.viewmodel.ProfileEditViewModel
 
@@ -101,7 +102,12 @@ fun ProfileEditScreen(
                 contentAlignment = Alignment.Center
             ) {
                 val displayUri = uiState.localAvatarUri
-                val displayUrl = uiState.cloudAvatarUrl ?: user?.photoUrl
+                val rawPhotoUrl = user?.photoUrl
+                var resolvedFallback by remember(rawPhotoUrl) { mutableStateOf<String?>(null) }
+                LaunchedEffect(rawPhotoUrl) {
+                    resolvedFallback = CloudBaseStorageHelper.resolveAvatarUrl(rawPhotoUrl)
+                }
+                val displayUrl = uiState.cloudAvatarUrl ?: resolvedFallback
 
                 if (displayUri != null) {
                     AsyncImage(
