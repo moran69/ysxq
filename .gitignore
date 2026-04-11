@@ -1,0 +1,16 @@
+*.iml
+.gradle/
+local.properties
+.idea/
+.kotlin/
+build/
+*.apk
+*.aab
+*.log
+.claude/
+.remember/
+.sisyphus/
+combined.log
+error.log
+release.keystore
+keystore.properties

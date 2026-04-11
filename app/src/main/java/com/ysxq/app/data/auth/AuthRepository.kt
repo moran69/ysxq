@@ -1,0 +1,392 @@
+package com.ysxq.app.data.auth
+
+import android.net.Uri
+import com.ysxq.app.data.NetworkModule
+import com.ysxq.app.data.local.userPreferences
+import kotlinx.serialization.json.Json
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+
+object AuthRepository {
+
+    private val api = NetworkModule.cloudBaseAuthService
+    private val deviceId: String by lazy { NetworkModule.cloudBaseDeviceId }
+    private val backgroundScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    /**
+     * Launch a coroutine that survives ViewModel destruction (e.g., avatar upload after navigation).
+     */
+    fun launchInBackground(block: suspend CoroutineScope.() -> Unit) {
+        backgroundScope.launch(block = block)
+    }
+
+    private val _currentUser = MutableStateFlow<User?>(null)
+    val currentUser: User? get() = _currentUser.value
+
+    val isLoggedIn: Boolean get() = _currentUser.value != null
+
+    private val _authState = MutableStateFlow<AuthState>(AuthState.Unauthenticated)
+    private val accessTokenHolder = MutableStateFlow<String?>(null)
+    @Volatile
+    private var refreshTokenHolder: String? = null
+
+    private val _logoutReason = MutableStateFlow<String?>(null)
+    val logoutReason: Flow<String?> = _logoutReason.asStateFlow()
+
+    fun consumeLogoutReason(): String? {
+        val reason = _logoutReason.value
+        _logoutReason.value = null
+        return reason
+    }
+
+    fun authStateChanges(): Flow<AuthState> = _authState.asStateFlow()
+
+    fun restoreSession(user: User, accessToken: String, refreshToken: String?) {
+        _currentUser.value = user
+        accessTokenHolder.value = accessToken
+        refreshTokenHolder = refreshToken
+        _authState.value = AuthState.Authenticated(user)
+    }
+
+    suspend fun sendPhoneVerificationCode(phone: String): Result<SendCodeResult> {
+        return try {
+            val response = api.sendVerificationCode(
+                deviceId = deviceId,
+                request = CloudBaseSendCodeRequest(phoneNumber = phone)
+            )
+            val verificationId = response.verificationId
+                ?: return Result.failure(Exception(response.getErrorMessage() ?: "发送失败"))
+            Result.success(SendCodeResult(verificationId, response.isUser ?: false))
+        } catch (e: Exception) {
+            Result.failure(mapError(e))
+        }
+    }
+
+    suspend fun sendEmailVerificationCode(email: String): Result<SendCodeResult> {
+        return try {
+            val response = api.sendVerificationCode(
+                deviceId = deviceId,
+                request = CloudBaseSendCodeRequest(email = email)
+            )
+            val verificationId = response.verificationId
+                ?: return Result.failure(Exception(response.getErrorMessage() ?: "发送失败"))
+            Result.success(SendCodeResult(verificationId, response.isUser ?: false))
+        } catch (e: Exception) {
+            Result.failure(mapError(e))
+        }
+    }
+
+    suspend fun verifyCode(verificationId: String, code: String): Result<String> {
+        return try {
+            val response = api.verifyCode(
+                request = CloudBaseVerifyCodeRequest(
+                    verificationId = verificationId,
+                    verificationCode = code
+                )
+            )
+            val token = response.verificationToken
+                ?: return Result.failure(Exception(response.getErrorMessage() ?: "验证失败"))
+            Result.success(token)
+        } catch (e: Exception) {
+            Result.failure(mapError(e))
+        }
+    }
+
+    suspend fun signInWithVerificationToken(verificationToken: String): Result<User> {
+        return try {
+            val response = api.signInWithToken(
+                deviceId = deviceId,
+                request = CloudBaseSignInRequest(verificationToken = verificationToken)
+            )
+            handleAuthResponse(response)
+        } catch (e: Exception) {
+            Result.failure(mapError(e))
+        }
+    }
+
+    suspend fun signInWithPassword(username: String, password: String): Result<User> {
+        return try {
+            val response = api.signInWithPassword(
+                deviceId = deviceId,
+                request = CloudBaseSignInWithPasswordRequest(username = username, password = password)
+            )
+            handleAuthResponse(response)
+        } catch (e: Exception) {
+            Result.failure(mapError(e))
+        }
+    }
+
+    suspend fun signUpWithEmail(email: String, username: String, password: String?, verificationToken: String): Result<User> {
+        return try {
+            val response = api.signUp(
+                deviceId = deviceId,
+                request = CloudBaseSignUpRequest(
+                    email = email,
+                    username = username,
+                    password = password,
+                    verificationToken = verificationToken
+                )
+            )
+            handleAuthResponse(response)
+        } catch (e: Exception) {
+            if (e.message?.contains("409") == true || e.message?.contains("conflict", ignoreCase = true) == true) {
+                signInWithVerificationToken(verificationToken)
+            } else {
+                Result.failure(mapError(e))
+            }
+        }
+    }
+
+    suspend fun signUpWithPhone(phone: String, username: String, password: String?, verificationToken: String): Result<User> {
+        return try {
+            val response = api.signUp(
+                deviceId = deviceId,
+                request = CloudBaseSignUpRequest(
+                    phoneNumber = phone,
+                    username = username,
+                    password = password,
+                    verificationToken = verificationToken
+                )
+            )
+            handleAuthResponse(response)
+        } catch (e: Exception) {
+            if (e.message?.contains("409") == true || e.message?.contains("conflict", ignoreCase = true) == true) {
+                signInWithVerificationToken(verificationToken)
+            } else {
+                Result.failure(mapError(e))
+            }
+        }
+    }
+
+    suspend fun reloadUser(): Result<User> {
+        return try {
+            val token = accessTokenHolder.value
+                ?: return Result.failure(Exception("用户未登录"))
+            val response = api.getUserProfile(authorization = "Bearer $token")
+            val info = response.toUserInfo()
+                ?: return Result.failure(Exception(response.getErrorMessage() ?: "获取用户信息失败"))
+            val user = info.toDomainUser()
+            _currentUser.value = user
+            _authState.value = AuthState.Authenticated(user)
+            Result.success(user)
+        } catch (e: Exception) {
+            Result.failure(mapError(e))
+        }
+    }
+
+    suspend fun updateProfile(displayName: String? = null, photoUri: Uri? = null): Result<User> {
+        return try {
+            val token = accessTokenHolder.value
+                ?: return Result.failure(Exception("用户未登录"))
+            val response = api.updateProfile(
+                authorization = "Bearer $token",
+                deviceId = deviceId,
+                request = CloudBaseUpdateProfileRequest(
+                    nickName = displayName,
+                    avatarUrl = photoUri?.toString()
+                )
+            )
+            val errMsg = response.getErrorMessage()
+            if (errMsg != null) {
+                return Result.failure(Exception("更新资料失败: $errMsg"))
+            }
+            // Update user locally
+            val currentUser = _currentUser.value ?: return Result.failure(Exception("用户未登录"))
+            val updatedUser = currentUser.copy(
+                displayName = displayName ?: currentUser.displayName,
+                photoUrl = photoUri?.toString() ?: currentUser.photoUrl
+            )
+            _currentUser.value = updatedUser
+            _authState.value = AuthState.Authenticated(updatedUser)
+            Result.success(updatedUser)
+        } catch (e: Exception) {
+            Result.failure(mapError(e))
+        }
+    }
+
+    suspend fun signOut(reason: String? = null) {
+        val token = accessTokenHolder.value
+        if (token != null) {
+            try {
+                api.signOut("Bearer $token")
+            } catch (_: Exception) { }
+        }
+        _currentUser.value = null
+        accessTokenHolder.value = null
+        refreshTokenHolder = null
+        _authState.value = AuthState.Unauthenticated
+        if (reason != null) {
+            _logoutReason.value = reason
+        }
+        val app = com.ysxq.app.App.instance
+        if (app != null) {
+            try {
+                app.userPreferences().clearAll()
+            } catch (_: Exception) { }
+        }
+    }
+
+    fun getAccessToken(): String? = accessTokenHolder.value
+    fun getRefreshToken(): String? = refreshTokenHolder
+
+    private val refreshLock = Any()
+
+    suspend fun refreshAccessToken(): String? {
+        synchronized(refreshLock) {
+            val currentToken = accessTokenHolder.value
+            if (currentToken != null && currentToken != _tokenBeforeRefresh) {
+                return currentToken
+            }
+        }
+        return doRefresh()
+    }
+
+    @Volatile
+    private var _tokenBeforeRefresh: String? = null
+
+    private suspend fun doRefresh(): String? {
+        synchronized(refreshLock) {
+            val currentToken = accessTokenHolder.value
+            if (currentToken != null && currentToken != _tokenBeforeRefresh) {
+                return currentToken
+            }
+            _tokenBeforeRefresh = currentToken
+        }
+        try {
+            val refreshToken = refreshTokenHolder ?: return null
+            val response = api.refreshToken(
+                request = CloudBaseRefreshTokenRequest(refreshToken = refreshToken)
+            )
+            if (response.error != null) {
+                signOut(reason = "登录已过期，请重新登录")
+                return null
+            }
+            val newAccessToken = response.accessToken ?: return null
+            accessTokenHolder.value = newAccessToken
+            response.refreshToken?.let { refreshTokenHolder = it }
+            val app = com.ysxq.app.App.instance ?: return newAccessToken
+            val prefs = app.userPreferences()
+            prefs.saveUserLogin(
+                _currentUser.value ?: return newAccessToken,
+                newAccessToken,
+                response.refreshToken ?: refreshToken
+            )
+            return newAccessToken
+        } catch (_: Exception) {
+            return null
+        } finally {
+            synchronized(refreshLock) {
+                _tokenBeforeRefresh = null
+            }
+        }
+    }
+
+    private suspend fun handleAuthResponse(response: CloudBaseAuthResponse): Result<User> {
+        if (response.error != null) {
+            return Result.failure(Exception(response.getErrorMessage() ?: "认证失败"))
+        }
+        val accessToken = response.accessToken
+            ?: return Result.failure(Exception("未获取到访问令牌"))
+
+        accessTokenHolder.value = accessToken
+        refreshTokenHolder = response.refreshToken
+
+        val user = response.user?.toDomainUser()
+        if (user != null) {
+            _currentUser.value = user
+            _authState.value = AuthState.Authenticated(user)
+            return Result.success(user)
+        }
+
+        return fetchUserProfile()
+    }
+
+    private suspend fun fetchUserProfile(): Result<User> {
+        val token = accessTokenHolder.value
+            ?: return Result.failure(Exception("未获取到访问令牌"))
+        return try {
+            val response = api.getUserProfile(authorization = "Bearer $token")
+            if (response.error != null) {
+                return Result.failure(Exception(response.getErrorMessage() ?: "获取用户信息失败"))
+            }
+            val info = response.toUserInfo()
+                ?: return Result.failure(Exception("获取用户信息失败"))
+            val user = info.toDomainUser()
+            _currentUser.value = user
+            _authState.value = AuthState.Authenticated(user)
+            Result.success(user)
+        } catch (e: Exception) {
+            Result.failure(mapError(e))
+        }
+    }
+
+    private fun CloudBaseUserInfo.toDomainUser(): User {
+        val uid = sub ?: userId ?: ""
+        return User(
+            uid = uid,
+            email = email ?: "",
+            phone = phoneNumber ?: "",
+            displayName = name ?: username ?: email?.substringBefore("@") ?: "用户",
+            photoUrl = picture,
+            isEmailVerified = emailVerified ?: (email != null)
+        )
+    }
+
+    private val errorJson = Json { ignoreUnknownKeys = true }
+
+    private fun mapError(e: Exception): Exception {
+        val message = e.message ?: return Exception("未知错误")
+        // Try to parse CloudBase error body from HttpException
+        val detailedMessage = extractCloudBaseError(e) ?: message
+        return when {
+            detailedMessage.contains("user_not_found", ignoreCase = true) ->
+                Exception("用户不存在")
+            detailedMessage.contains("invalid_password", ignoreCase = true) ->
+                Exception("密码错误")
+            detailedMessage.contains("invalid_verification_code", ignoreCase = true) ->
+                Exception("验证码错误")
+            detailedMessage.contains("verification_code_expired", ignoreCase = true) ->
+                Exception("验证码已过期")
+            detailedMessage.contains("captcha_required", ignoreCase = true) ->
+                Exception("需要图片验证码验证")
+            detailedMessage.contains("rate_limit", ignoreCase = true) ->
+                Exception("请求过于频繁，请稍后再试")
+            detailedMessage.contains("phone_number_already_exists", ignoreCase = true) ||
+            detailedMessage.contains("email_already_exists", ignoreCase = true) ||
+            detailedMessage.contains("409", ignoreCase = true) ||
+            detailedMessage.contains("conflict", ignoreCase = true) ->
+                Exception("该账号已被注册")
+            detailedMessage.contains("too_many_requests", ignoreCase = true) ||
+            detailedMessage.contains("429", ignoreCase = true) ->
+                Exception("请求过于频繁，请稍后再试")
+            detailedMessage.contains("ConnectException", ignoreCase = true) ||
+            detailedMessage.contains("SocketTimeoutException", ignoreCase = true) ||
+            detailedMessage.contains("Unable to resolve host", ignoreCase = true) ->
+                Exception("网络连接失败，请检查网络")
+            detailedMessage.contains("401", ignoreCase = true) ->
+                Exception("认证失败，请重新登录")
+            // Show the actual CloudBase error_description if available
+            detailedMessage != message -> Exception(detailedMessage)
+            else -> Exception(message)
+        }
+    }
+
+    private fun extractCloudBaseError(e: Exception): String? {
+        if (e !is retrofit2.HttpException) return null
+        val errorBody = e.response()?.errorBody()?.string() ?: return null
+        return try {
+            val parsed = errorJson.decodeFromString<CloudBaseAuthResponse>(errorBody)
+            parsed.errorDescription ?: parsed.error
+        } catch (_: Exception) {
+            try {
+                val parsed = errorJson.decodeFromString<CloudBaseVerificationResponse>(errorBody)
+                parsed.errorDescription ?: parsed.error
+            } catch (_: Exception) { null }
+        }
+    }
+}
