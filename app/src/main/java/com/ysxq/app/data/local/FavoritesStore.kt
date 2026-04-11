@@ -62,6 +62,18 @@ class FavoritesStore(private val dataStore: DataStore<Preferences>) {
         }
     }
 
+    suspend fun replaceAll(items: List<FavoriteItem>) {
+        dataStore.edit { prefs ->
+            prefs[KEY_FAVORITES] = json.encodeToString(items.sortedByDescending { it.addedAt })
+        }
+    }
+
+    suspend fun clearAll() {
+        dataStore.edit { prefs ->
+            prefs[KEY_FAVORITES] = "[]"
+        }
+    }
+
     fun isFavoriteFlow(videoId: Int): Flow<Boolean> = dataStore.data.map { prefs ->
         val raw = prefs[KEY_FAVORITES] ?: "[]"
         val list = runCatching { json.decodeFromString<List<FavoriteItem>>(raw) }.getOrDefault(emptyList())

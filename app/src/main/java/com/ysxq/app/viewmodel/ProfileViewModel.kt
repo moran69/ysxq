@@ -91,7 +91,6 @@ class ProfileViewModel(application: Application) : AndroidViewModel(application)
     fun signOut() {
         viewModelScope.launch {
             AuthRepository.signOut()
-            prefs.clearAll()
             _uiState.value = _uiState.value.copy(showLogoutDialog = false)
         }
     }

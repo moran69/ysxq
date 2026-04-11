@@ -8,6 +8,8 @@ import com.ysxq.app.data.local.FavoriteItem
 import com.ysxq.app.data.local.FavoritesStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 
@@ -15,6 +17,7 @@ class FavoritesSyncRepository(
     private val favoritesStore: FavoritesStore
 ) {
     private val api = NetworkModule.cloudBaseDatabaseService
+    private val syncMutex = Mutex()
 
     companion object {
         private const val TAG = "FavoritesSync"
@@ -109,32 +112,58 @@ class FavoritesSyncRepository(
     }
 
     suspend fun deleteFromCloud(videoId: Int) {
-        withContext(Dispatchers.IO) {
-            val token = AuthRepository.getAccessToken() ?: return@withContext
-            val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
-            try {
-                val filter = CloudBaseDbDeleteByFilterRequest(
-                    filter = CloudBaseDbFilter(
-                        where = mapOf(
-                            "uid" to buildJsonObject { put("\$eq", uid) },
-                            "id" to buildJsonObject { put("\$eq", videoId) }
+        syncMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val token = AuthRepository.getAccessToken() ?: return@withContext
+                val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
+                try {
+                    val filter = CloudBaseDbDeleteByFilterRequest(
+                        filter = CloudBaseDbFilter(
+                            where = mapOf(
+                                "uid" to buildJsonObject { put("\$eq", uid) },
+                                "id" to buildJsonObject { put("\$eq", videoId) }
+                            )
                         )
                     )
-                )
-                val response = api.deleteByFilter("Bearer $token", MODEL_NAME, filter)
-                val errMsg = response.getErrorMessage()
-                if (errMsg != null) {
-                    Log.e(TAG, "云端删除收藏失败: $errMsg")
+                    val response = api.deleteByFilter("Bearer $token", MODEL_NAME, filter)
+                    val errMsg = response.getErrorMessage()
+                    if (errMsg != null) {
+                        Log.e(TAG, "云端删除收藏失败: $errMsg")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "云端删除收藏失败: ${e.message}")
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "云端删除收藏失败: ${e.message}")
+            }
+        }
+    }
+
+    suspend fun clearCloud() {
+        syncMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val token = AuthRepository.getAccessToken() ?: return@withContext
+                val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
+                try {
+                    val filter = CloudBaseDbDeleteByFilterRequest(
+                        filter = CloudBaseDbFilter(
+                            where = mapOf("uid" to buildJsonObject { put("\$eq", uid) })
+                        )
+                    )
+                    val response = api.deleteByFilter("Bearer $token", MODEL_NAME, filter)
+                    val errMsg = response.getErrorMessage()
+                    if (errMsg != null) {
+                        Log.e(TAG, "云端清空收藏失败: $errMsg")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "云端清空收藏失败: ${e.message}")
+                }
             }
         }
     }
 
     suspend fun pullFromCloud() {
-        withContext(Dispatchers.IO) {
-            val token = AuthRepository.getAccessToken() ?: return@withContext
+        syncMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val token = AuthRepository.getAccessToken() ?: return@withContext
             val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
             try {
                 val response = api.list(
@@ -173,20 +202,22 @@ class FavoritesSyncRepository(
 
                 val localItems = favoritesStore.favorites.first()
                 val localIds = localItems.map { it.id }.toSet()
-                for (cloudItem in cloudItems) {
-                    if (cloudItem.id !in localIds) {
-                        favoritesStore.addFavorite(cloudItem)
-                    }
-                }
+                val newFromCloud = cloudItems.filter { it.id !in localIds }
 
                 val cloudIds = cloudItems.map { it.id }.toSet()
-                for (localItem in localItems) {
-                    if (localItem.id !in cloudIds) {
-                        upsertToCloud(localItem)
-                    }
+                val localOnly = localItems.filter { it.id !in cloudIds }
+
+                if (newFromCloud.isNotEmpty()) {
+                    val merged = (localItems + newFromCloud).sortedByDescending { it.addedAt }
+                    favoritesStore.replaceAll(merged)
+                }
+
+                for (localItem in localOnly) {
+                    upsertToCloud(localItem)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "从云端拉取收藏失败: ${e.message}")
+            }
             }
         }
     }

@@ -32,6 +32,7 @@ import com.ysxq.app.data.auth.AuthState
 import com.ysxq.app.data.local.favoritesStore
 import com.ysxq.app.data.local.userPreferences
 import com.ysxq.app.data.local.watchHistoryStore
+import com.ysxq.app.data.storage.CloudBaseStorageHelper
 import com.ysxq.app.data.sync.FavoritesSyncRepository
 import com.ysxq.app.data.sync.WatchHistorySyncRepository
 import com.ysxq.app.ui.screens.*
@@ -75,6 +76,14 @@ fun AppNavHost(
                     navController.navigate(Screen.Auth.route) {
                         popUpTo(Screen.Home.route) { inclusive = false }
                         launchSingleTop = true
+                    }
+                }
+            }
+            if (state is AuthState.Authenticated) {
+                val photoUrl = state.user.photoUrl
+                if (!photoUrl.isNullOrBlank() && photoUrl.startsWith("cloud://")) {
+                    launch(Dispatchers.IO) {
+                        CloudBaseStorageHelper.resolveAvatarUrl(photoUrl)
                     }
                 }
             }

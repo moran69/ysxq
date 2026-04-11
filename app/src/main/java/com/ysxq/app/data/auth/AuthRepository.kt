@@ -239,6 +239,7 @@ object AuthRepository {
             _logoutReason.value = reason
             sessionExpiredMessage = reason
         }
+        com.ysxq.app.data.storage.CloudBaseStorageHelper.clearCache()
         val app = com.ysxq.app.App.instance
         if (app != null) {
             try {

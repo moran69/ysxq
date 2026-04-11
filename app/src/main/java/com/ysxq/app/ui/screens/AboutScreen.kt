@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import com.ysxq.app.BuildConfig
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ysxq.app.ui.theme.*
@@ -104,7 +105,7 @@ fun AboutScreen(
                         )
 
                         Text(
-                            text = "版本 1.0.0",
+                            text = "版本 ${BuildConfig.VERSION_NAME}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = TextTertiary,
                             textAlign = TextAlign.Center,

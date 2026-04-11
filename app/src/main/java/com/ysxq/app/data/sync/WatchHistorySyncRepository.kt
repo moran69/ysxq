@@ -8,6 +8,8 @@ import com.ysxq.app.data.local.WatchHistoryEntry
 import com.ysxq.app.data.local.WatchHistoryStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 
@@ -16,6 +18,7 @@ class WatchHistorySyncRepository(
 ) {
     private val api = NetworkModule.cloudBaseDatabaseService
     private val json = Json { ignoreUnknownKeys = true }
+    private val syncMutex = Mutex()
 
     companion object {
         private const val TAG = "HistorySync"
@@ -114,53 +117,58 @@ class WatchHistorySyncRepository(
     }
 
     suspend fun deleteFromCloud(videoId: Int) {
-        withContext(Dispatchers.IO) {
-            val token = AuthRepository.getAccessToken() ?: return@withContext
-            val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
-            try {
-                val filter = CloudBaseDbDeleteByFilterRequest(
-                    filter = CloudBaseDbFilter(
-                        where = mapOf(
-                            "uid" to buildJsonObject { put("\$eq", uid) },
-                            "videoId" to buildJsonObject { put("\$eq", videoId) }
+        syncMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val token = AuthRepository.getAccessToken() ?: return@withContext
+                val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
+                try {
+                    val filter = CloudBaseDbDeleteByFilterRequest(
+                        filter = CloudBaseDbFilter(
+                            where = mapOf(
+                                "uid" to buildJsonObject { put("\$eq", uid) },
+                                "videoId" to buildJsonObject { put("\$eq", videoId) }
+                            )
                         )
                     )
-                )
-                val response = api.deleteByFilter("Bearer $token", MODEL_NAME, filter)
-                val errMsg = response.getErrorMessage()
-                if (errMsg != null) {
-                    Log.e(TAG, "云端删除历史失败: $errMsg")
+                    val response = api.deleteByFilter("Bearer $token", MODEL_NAME, filter)
+                    val errMsg = response.getErrorMessage()
+                    if (errMsg != null) {
+                        Log.e(TAG, "云端删除历史失败: $errMsg")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "云端删除历史失败: ${e.message}")
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "云端删除历史失败: ${e.message}")
             }
         }
     }
 
     suspend fun clearCloud() {
-        withContext(Dispatchers.IO) {
-            val token = AuthRepository.getAccessToken() ?: return@withContext
-            val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
-            try {
-                val filter = CloudBaseDbDeleteByFilterRequest(
-                    filter = CloudBaseDbFilter(
-                        where = mapOf("uid" to buildJsonObject { put("\$eq", uid) })
+        syncMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val token = AuthRepository.getAccessToken() ?: return@withContext
+                val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
+                try {
+                    val filter = CloudBaseDbDeleteByFilterRequest(
+                        filter = CloudBaseDbFilter(
+                            where = mapOf("uid" to buildJsonObject { put("\$eq", uid) })
+                        )
                     )
-                )
-                val response = api.deleteByFilter("Bearer $token", MODEL_NAME, filter)
-                val errMsg = response.getErrorMessage()
-                if (errMsg != null) {
-                    Log.e(TAG, "云端清空历史失败: $errMsg")
+                    val response = api.deleteByFilter("Bearer $token", MODEL_NAME, filter)
+                    val errMsg = response.getErrorMessage()
+                    if (errMsg != null) {
+                        Log.e(TAG, "云端清空历史失败: $errMsg")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "云端清空历史失败: ${e.message}")
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "云端清空历史失败: ${e.message}")
             }
         }
     }
 
     suspend fun pullFromCloud() {
-        withContext(Dispatchers.IO) {
-            val token = AuthRepository.getAccessToken() ?: return@withContext
+        syncMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val token = AuthRepository.getAccessToken() ?: return@withContext
             val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
             try {
                 val response = api.list(
@@ -204,6 +212,7 @@ class WatchHistorySyncRepository(
                 historyStore.replaceAll(merged)
             } catch (e: Exception) {
                 Log.w(TAG, "从云端拉取历史失败: ${e.message}")
+            }
             }
         }
     }

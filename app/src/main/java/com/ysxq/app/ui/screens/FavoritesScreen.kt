@@ -9,12 +9,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -43,6 +45,7 @@ fun FavoritesScreen(
     val scope = rememberCoroutineScope()
 
     var itemToDelete by remember { mutableStateOf<FavoriteItem?>(null) }
+    var showClearDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         favoritesSyncRepo.pullFromCloud()
@@ -54,6 +57,13 @@ fun FavoritesScreen(
             navigationIcon = {
                 IconButton(onClick = onBack) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary)
+                }
+            },
+            actions = {
+                if (favorites.isNotEmpty()) {
+                    IconButton(onClick = { showClearDialog = true }) {
+                        Icon(Icons.Filled.DeleteSweep, "清空", tint = TextTertiary)
+                    }
                 }
             },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = DarkBackground)
@@ -120,6 +130,30 @@ fun FavoritesScreen(
             containerColor = DarkSurface,
             titleContentColor = TextPrimary,
             textContentColor = TextSecondary
+        )
+    }
+
+    if (showClearDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearDialog = false },
+            title = { Text("清空收藏", color = TextPrimary) },
+            text = { Text("确定要清空所有收藏吗？", color = TextSecondary) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showClearDialog = false
+                        scope.launch(Dispatchers.IO) {
+                            favoritesSyncRepo.clearCloud()
+                            favoritesStore.clearAll()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6B6B))
+                ) { Text("清空", color = Color.White) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearDialog = false }) { Text("取消", color = TextTertiary) }
+            },
+            containerColor = DarkSurface
         )
     }
 }

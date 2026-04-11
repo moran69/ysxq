@@ -79,6 +79,10 @@ class CloudBaseStorageHelper(private val context: Context) {
         fun cacheResolvedUrl(fileId: String, downloadUrl: String) {
             urlCache[fileId] = downloadUrl to (System.currentTimeMillis() + URL_CACHE_DURATION_MS)
         }
+
+        fun clearCache() {
+            urlCache.clear()
+        }
     }
 
     suspend fun uploadAvatar(fileUri: Uri, uid: String): Result<AvatarUploadResult> = withContext(Dispatchers.IO) {

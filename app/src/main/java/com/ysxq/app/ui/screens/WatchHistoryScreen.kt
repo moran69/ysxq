@@ -60,11 +60,11 @@ fun WatchHistoryScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        scope.launch(Dispatchers.IO) {
-                            historyStore.clearAll()
-                            historySyncRepo.clearCloud()
-                        }
                         showClearDialog = false
+                        scope.launch(Dispatchers.IO) {
+                            historySyncRepo.clearCloud()
+                            historyStore.clearAll()
+                        }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6B6B))
                 ) { Text("清空", color = Color.White) }
