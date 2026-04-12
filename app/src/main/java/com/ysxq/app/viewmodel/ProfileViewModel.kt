@@ -8,6 +8,7 @@ import com.ysxq.app.data.auth.AuthRepository
 import com.ysxq.app.data.auth.AuthState
 import com.ysxq.app.data.auth.User
 import com.ysxq.app.data.local.userPreferences
+import com.ysxq.app.data.sync.ProfileSyncRepository
 import coil3.SingletonImageLoader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,6 +42,9 @@ class ProfileViewModel(application: Application) : AndroidViewModel(application)
 
     val isGuest: StateFlow<Boolean> = prefs.isGuest
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    val resolvedAvatarUrl: StateFlow<String?> = prefs.resolvedAvatarUrl
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     private val _uiState = MutableStateFlow(ProfileUiState())
     val uiState: StateFlow<ProfileUiState> = _uiState.asStateFlow()
@@ -122,6 +126,7 @@ class ProfileViewModel(application: Application) : AndroidViewModel(application)
             AuthRepository.updateProfile(displayName = nickname)
                 .onSuccess { user ->
                     prefs.saveUserLogin(user, AuthRepository.getAccessToken(), AuthRepository.getRefreshToken())
+                    ProfileSyncRepository().saveDisplayNameToCloud(nickname)
                     _uiState.value = _uiState.value.copy(
                         showEditProfileDialog = false,
                         isUpdating = false
@@ -186,5 +191,11 @@ class ProfileViewModel(application: Application) : AndroidViewModel(application)
 
     fun dismissSessionExpired() {
         _uiState.update { it.copy(sessionExpiredMessage = null) }
+    }
+
+    fun updatePersistedAvatarUrl(url: String) {
+        viewModelScope.launch {
+            prefs.saveResolvedAvatarUrl(url)
+        }
     }
 }

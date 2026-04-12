@@ -10,6 +10,7 @@ import com.ysxq.app.data.auth.User
 import com.ysxq.app.data.local.userPreferences
 import com.ysxq.app.data.storage.AvatarUploadResult
 import com.ysxq.app.data.storage.CloudBaseStorageHelper
+import com.ysxq.app.data.sync.ProfileSyncRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -22,6 +23,7 @@ data class ProfileEditUiState(
     val editNickname: String = "",
     val localAvatarUri: Uri? = null,
     val cloudAvatarUrl: String? = null,
+    val persistedResolvedUrl: String? = null,
     val isUploadingAvatar: Boolean = false,
     val isSaving: Boolean = false,
     val error: String? = null,
@@ -75,6 +77,11 @@ class ProfileEditViewModel(application: Application) : AndroidViewModel(applicat
                 _uiState.value = _uiState.value.copy(localAvatarUri = uri)
             }
         }
+        viewModelScope.launch {
+            prefs.resolvedAvatarUrl.collect { url ->
+                _uiState.value = _uiState.value.copy(persistedResolvedUrl = url)
+            }
+        }
     }
 
     fun onNicknameChange(name: String) {
@@ -101,6 +108,8 @@ class ProfileEditViewModel(application: Application) : AndroidViewModel(applicat
                         prefs.saveUserLogin(user, AuthRepository.getAccessToken(), AuthRepository.getRefreshToken())
                     }
                     CloudBaseStorageHelper.cacheResolvedUrl(uploadResult.fileId, uploadResult.downloadUrl)
+                    prefs.saveResolvedAvatarUrl(uploadResult.downloadUrl)
+                    ProfileSyncRepository().saveAvatarToCloud(uploadResult.fileId)
                     avatarUploadInProgress = false
                     _uiState.value = _uiState.value.copy(
                         cloudAvatarUrl = uploadResult.downloadUrl,
@@ -139,6 +148,7 @@ class ProfileEditViewModel(application: Application) : AndroidViewModel(applicat
                 if (user != null) {
                     prefs.saveUserLogin(user, AuthRepository.getAccessToken(), AuthRepository.getRefreshToken())
                 }
+                ProfileSyncRepository().saveDisplayNameToCloud(nickname)
                 _uiState.value = _uiState.value.copy(
                     isSaving = false,
                     saveSuccess = true
@@ -154,5 +164,11 @@ class ProfileEditViewModel(application: Application) : AndroidViewModel(applicat
 
     fun clearError() {
         _uiState.value = _uiState.value.copy(error = null)
+    }
+
+    fun savePersistedAvatarUrl(url: String) {
+        viewModelScope.launch {
+            prefs.saveResolvedAvatarUrl(url)
+        }
     }
 }

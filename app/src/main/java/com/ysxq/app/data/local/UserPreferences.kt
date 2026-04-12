@@ -30,6 +30,7 @@ class UserPreferences(private val dataStore: DataStore<Preferences>) {
         private val KEY_ACCESS_TOKEN = stringPreferencesKey("access_token")
         private val KEY_REFRESH_TOKEN = stringPreferencesKey("refresh_token")
         private val KEY_LOCAL_AVATAR_URI = stringPreferencesKey("local_avatar_uri")
+        private val KEY_RESOLVED_AVATAR_URL = stringPreferencesKey("resolved_avatar_url")
     }
 
     val isLoggedIn: Flow<Boolean> = dataStore.data.map { it[KEY_IS_LOGGED_IN] ?: false }
@@ -56,6 +57,10 @@ class UserPreferences(private val dataStore: DataStore<Preferences>) {
 
     val localAvatarUri: Flow<Uri?> = dataStore.data.map { prefs ->
         prefs[KEY_LOCAL_AVATAR_URI]?.let { Uri.parse(it) }
+    }
+
+    val resolvedAvatarUrl: Flow<String?> = dataStore.data.map { prefs ->
+        prefs[KEY_RESOLVED_AVATAR_URL]
     }
 
     suspend fun saveUserLogin(user: User, accessToken: String? = null, refreshToken: String? = null) {
@@ -97,6 +102,16 @@ class UserPreferences(private val dataStore: DataStore<Preferences>) {
     suspend fun clearLocalAvatarUri() {
         dataStore.edit { prefs ->
             prefs.remove(KEY_LOCAL_AVATAR_URI)
+        }
+    }
+
+    suspend fun saveResolvedAvatarUrl(url: String?) {
+        dataStore.edit { prefs ->
+            if (url != null) {
+                prefs[KEY_RESOLVED_AVATAR_URL] = url
+            } else {
+                prefs.remove(KEY_RESOLVED_AVATAR_URL)
+            }
         }
     }
 }

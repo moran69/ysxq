@@ -46,7 +46,6 @@ class WatchHistorySyncRepository(
                             put("episodeName", entry.episodeName)
                             put("positionMs", entry.positionMs)
                             put("durationMs", entry.durationMs)
-                            put("updatedAt", entry.updatedAt)
                         }
                         val response = api.updateByFilter(
                             "Bearer $token",
@@ -76,7 +75,6 @@ class WatchHistorySyncRepository(
                         put("episodeName", entry.episodeName)
                         put("positionMs", entry.positionMs)
                         put("durationMs", entry.durationMs)
-                        put("updatedAt", entry.updatedAt)
                     }
                     val createBody = buildJsonObject { put("data", fields) }
                     val response = api.create("Bearer $token", MODEL_NAME, createBody)

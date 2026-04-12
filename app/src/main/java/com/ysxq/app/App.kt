@@ -7,7 +7,12 @@ import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.CachePolicy
 import com.yinnho.upnpcast.DLNACast
 import com.ysxq.app.data.auth.AuthRepository
+import com.ysxq.app.data.local.favoritesStore
 import com.ysxq.app.data.local.userPreferences
+import com.ysxq.app.data.local.watchHistoryStore
+import com.ysxq.app.data.sync.FavoritesSyncRepository
+import com.ysxq.app.data.sync.ProfileSyncRepository
+import com.ysxq.app.data.sync.WatchHistorySyncRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -66,6 +71,18 @@ class App : Application() {
                 val result = AuthRepository.reloadUser()
                 if (result.isFailure) {
                     AuthRepository.signOut(reason = "登录已过期，请重新登录")
+                } else {
+                    try {
+                        FavoritesSyncRepository(favoritesStore()).pullFromCloud()
+                        WatchHistorySyncRepository(watchHistoryStore()).pullFromCloud()
+                    } catch (_: Exception) { }
+                    try {
+                        val profile = ProfileSyncRepository().loadProfileFromCloud()
+                        if (profile != null) {
+                            AuthRepository.applyCloudAvatarUrl(profile.first)
+                            AuthRepository.applyCloudDisplayName(profile.second)
+                        }
+                    } catch (_: Exception) { }
                 }
             }
         }

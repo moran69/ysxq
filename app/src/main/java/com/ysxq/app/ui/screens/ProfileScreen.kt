@@ -47,16 +47,24 @@ fun ProfileScreen(
     val uiState by viewModel.uiState.collectAsState()
 
     val photoUrl = (authState as? AuthState.Authenticated)?.user?.photoUrl
+    val persistedResolvedUrl by viewModel.resolvedAvatarUrl.collectAsState()
     var resolvedPhotoUrl by remember(photoUrl) { mutableStateOf<String?>(null) }
     LaunchedEffect(photoUrl) {
-        resolvedPhotoUrl = CloudBaseStorageHelper.resolveAvatarUrl(photoUrl)
+        val resolved = CloudBaseStorageHelper.resolveAvatarUrl(photoUrl)
+        if (resolved != null) {
+            resolvedPhotoUrl = resolved
+            viewModel.updatePersistedAvatarUrl(resolved)
+        }
     }
+    val displayAvatarUrl = resolvedPhotoUrl ?: persistedResolvedUrl
 
     val avatarLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let { viewModel.updateAvatar(it) }
     }
+
+    var showLoginDialog by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -90,9 +98,9 @@ fun ProfileScreen(
                 .verticalScroll(rememberScrollState())
         ) {
             when (authState) {
-                is AuthState.Authenticated -> AuthenticatedContent(
+                is AuthState.Authenticated ->                 AuthenticatedContent(
                     viewModel = viewModel,
-                    resolvedPhotoUrl = resolvedPhotoUrl,
+                    displayAvatarUrl = displayAvatarUrl,
                     onAvatarClick = onProfileEditClick,
                     onLogoutClick = { viewModel.showLogoutDialog() },
                     onFavoritesClick = onFavoritesClick,
@@ -104,8 +112,7 @@ fun ProfileScreen(
                 is AuthState.Unauthenticated -> GuestContent(
                     isGuest = isGuest,
                     onLoginClick = onLoginClick,
-                    onFavoritesClick = onFavoritesClick,
-                    onWatchHistoryClick = onWatchHistoryClick,
+                    onRequireLogin = { showLoginDialog = true },
                     onFeedback = onFeedback,
                     onAbout = onAbout,
                     viewModel = viewModel
@@ -122,6 +129,28 @@ fun ProfileScreen(
         }
     }
 
+    if (showLoginDialog) {
+        AlertDialog(
+            onDismissRequest = { showLoginDialog = false },
+            title = { Text("提示", color = TextPrimary) },
+            text = { Text("请先登录后使用此功能", color = TextSecondary) },
+            confirmButton = {
+                Button(
+                    onClick = { showLoginDialog = false; onLoginClick() },
+                    colors = ButtonDefaults.buttonColors(containerColor = SakuraPrimary)
+                ) {
+                    Text("去登录", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLoginDialog = false }) {
+                    Text("取消", color = TextSecondary)
+                }
+            },
+            containerColor = DarkSurface
+        )
+    }
+
     if (uiState.showLogoutDialog) {
         LogoutDialog(
             onConfirm = { viewModel.signOut() },
@@ -135,7 +164,7 @@ fun ProfileScreen(
             isUpdating = uiState.isUpdating,
             error = uiState.updateError,
             localAvatarUri = uiState.localAvatarUri,
-            fallbackAvatarUrl = resolvedPhotoUrl,
+            fallbackAvatarUrl = displayAvatarUrl,
             onNicknameChange = { viewModel.onNicknameChange(it) },
             onAvatarClick = { avatarLauncher.launch("image/*") },
             onConfirm = { viewModel.updateNickname() },
@@ -147,7 +176,7 @@ fun ProfileScreen(
 @Composable
 private fun AuthenticatedContent(
     viewModel: ProfileViewModel,
-    resolvedPhotoUrl: String?,
+    displayAvatarUrl: String?,
     onAvatarClick: () -> Unit,
     onLogoutClick: () -> Unit,
     onFavoritesClick: () -> Unit,
@@ -194,9 +223,9 @@ private fun AuthenticatedContent(
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
-                } else if (!resolvedPhotoUrl.isNullOrBlank()) {
+                } else if (!displayAvatarUrl.isNullOrBlank()) {
                     AsyncImage(
-                        model = resolvedPhotoUrl,
+                        model = displayAvatarUrl,
                         contentDescription = "头像",
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
@@ -331,8 +360,7 @@ private fun AuthenticatedContent(
 private fun GuestContent(
     isGuest: Boolean,
     onLoginClick: () -> Unit,
-    onFavoritesClick: () -> Unit,
-    onWatchHistoryClick: () -> Unit,
+    onRequireLogin: () -> Unit,
     onFeedback: () -> Unit = {},
     onAbout: () -> Unit = {},
     viewModel: ProfileViewModel
@@ -419,8 +447,8 @@ private fun GuestContent(
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         MenuSectionTitle("功能")
-        MenuItem(icon = Icons.Outlined.FavoriteBorder, title = "我的收藏", onClick = onFavoritesClick)
-        MenuItem(icon = Icons.Outlined.History, title = "观看历史", onClick = onWatchHistoryClick)
+        MenuItem(icon = Icons.Outlined.FavoriteBorder, title = "我的收藏", onClick = onRequireLogin)
+        MenuItem(icon = Icons.Outlined.History, title = "观看历史", onClick = onRequireLogin)
 
         Spacer(modifier = Modifier.height(8.dp))
         MenuSectionTitle("设置")

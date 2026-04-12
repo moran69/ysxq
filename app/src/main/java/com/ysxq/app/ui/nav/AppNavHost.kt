@@ -34,6 +34,7 @@ import com.ysxq.app.data.local.userPreferences
 import com.ysxq.app.data.local.watchHistoryStore
 import com.ysxq.app.data.storage.CloudBaseStorageHelper
 import com.ysxq.app.data.sync.FavoritesSyncRepository
+import com.ysxq.app.data.sync.ProfileSyncRepository
 import com.ysxq.app.data.sync.WatchHistorySyncRepository
 import com.ysxq.app.ui.screens.*
 import com.ysxq.app.ui.theme.*
@@ -64,6 +65,13 @@ fun AppNavHost(
                     WatchHistorySyncRepository(histStore).pullFromCloud()
                 }
             } catch (_: Exception) { }
+            try {
+                val profile = ProfileSyncRepository().loadProfileFromCloud()
+                if (profile != null) {
+                    AuthRepository.applyCloudAvatarUrl(profile.first)
+                    AuthRepository.applyCloudDisplayName(profile.second)
+                }
+            } catch (_: Exception) { }
         }
     }
 
@@ -83,7 +91,10 @@ fun AppNavHost(
                 val photoUrl = state.user.photoUrl
                 if (!photoUrl.isNullOrBlank() && photoUrl.startsWith("cloud://")) {
                     launch(Dispatchers.IO) {
-                        CloudBaseStorageHelper.resolveAvatarUrl(photoUrl)
+                        val resolved = CloudBaseStorageHelper.resolveAvatarUrl(photoUrl)
+                        if (resolved != null) {
+                            context.userPreferences().saveResolvedAvatarUrl(resolved)
+                        }
                     }
                 }
             }

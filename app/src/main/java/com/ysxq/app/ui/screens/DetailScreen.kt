@@ -94,6 +94,7 @@ import com.ysxq.app.data.proxy.DlnaProxyServer
 import com.ysxq.app.data.proxy.DlnaProxyService
 import com.ysxq.app.ui.components.*
 import com.ysxq.app.ui.theme.*
+import com.ysxq.app.data.auth.AuthRepository
 import com.ysxq.app.viewmodel.DetailViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -135,6 +136,7 @@ fun DetailScreen(
     var lastCastPositionMs by remember { mutableStateOf(0L) }
     var isLongPressSpeed by remember { mutableStateOf(false) }
     var speedBeforeLongPress by remember { mutableFloatStateOf(1f) }
+    var showLoginDialog by remember { mutableStateOf(false) }
 
     val favoritesStore = remember { context.favoritesStore() }
     val watchHistoryStore = remember { context.watchHistoryStore() }
@@ -275,6 +277,7 @@ fun DetailScreen(
 
     fun saveWatchProgress() {
         val video = state.video ?: return
+        if (!AuthRepository.isLoggedIn) return
         val episode = state.sources.getOrNull(state.currentSourceIndex)
             ?.episodes?.getOrNull(state.currentEpisodeIndex)
         val positionMs = if (exoPlayer.contentDuration > 0) exoPlayer.currentPosition else 0L
@@ -433,6 +436,29 @@ fun DetailScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showCastExitDialog = false }) {
+                    Text("取消", color = TextSecondary)
+                }
+            },
+            containerColor = DarkSurface,
+            shape = RoundedCornerShape(16.dp)
+        )
+    }
+
+    if (showLoginDialog) {
+        AlertDialog(
+            onDismissRequest = { showLoginDialog = false },
+            title = { Text("提示", color = TextPrimary) },
+            text = { Text("请先登录后使用此功能", color = TextSecondary) },
+            confirmButton = {
+                Button(
+                    onClick = { showLoginDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = SakuraPrimary)
+                ) {
+                    Text("好的", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLoginDialog = false }) {
                     Text("取消", color = TextSecondary)
                 }
             },
@@ -830,6 +856,10 @@ fun DetailScreen(
                             ) {
                                 Text(video.name, fontSize = 22.sp, color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                                 TextButton(onClick = {
+                                    if (!AuthRepository.isLoggedIn) {
+                                        showLoginDialog = true
+                                        return@TextButton
+                                    }
                                     scope.launch {
                                         if (isFavorite) {
                                             favoritesStore.removeFavorite(videoId)

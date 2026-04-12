@@ -2,7 +2,9 @@ package com.ysxq.app.data.auth
 
 import android.net.Uri
 import com.ysxq.app.data.NetworkModule
+import com.ysxq.app.data.local.favoritesStore
 import com.ysxq.app.data.local.userPreferences
+import com.ysxq.app.data.local.watchHistoryStore
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -186,9 +188,28 @@ object AuthRepository {
                 ?: return Result.failure(Exception(response.getErrorMessage() ?: "获取用户信息失败"))
             val user = info.toDomainUser()
                 ?: return Result.failure(Exception("用户信息不完整（缺少uid）"))
-            _currentUser.value = user
-            _authState.value = AuthState.Authenticated(user)
-            Result.success(user)
+            // Preserve avatar URL if API doesn't return it in 'picture' field
+            // (updateProfile sends 'avatar_url' but getUserProfile returns 'picture')
+            val preservedUser = if (user.photoUrl.isNullOrBlank() && !_currentUser.value?.photoUrl.isNullOrBlank()) {
+                user.copy(photoUrl = _currentUser.value?.photoUrl)
+            } else {
+                user
+            }
+            _currentUser.value = preservedUser
+            _authState.value = AuthState.Authenticated(preservedUser)
+            // Save to DataStore so the preserved URL persists
+            val app = com.ysxq.app.App.instance
+            if (app != null) {
+                val prefs = app.userPreferences()
+                prefs.saveUserLogin(preservedUser)
+                if (!preservedUser.photoUrl.isNullOrBlank() && preservedUser.photoUrl.startsWith("cloud://")) {
+                    val resolved = com.ysxq.app.data.storage.CloudBaseStorageHelper.resolveAvatarUrl(preservedUser.photoUrl)
+                    if (resolved != null) {
+                        prefs.saveResolvedAvatarUrl(resolved)
+                    }
+                }
+            }
+            Result.success(preservedUser)
         } catch (e: Exception) {
             Result.failure(mapError(e))
         }
@@ -244,12 +265,43 @@ object AuthRepository {
         if (app != null) {
             try {
                 app.userPreferences().clearAll()
+                app.favoritesStore().clearAll()
+                app.watchHistoryStore().clearAll()
             } catch (_: Exception) { }
         }
     }
 
     fun getAccessToken(): String? = accessTokenHolder.value
     fun getRefreshToken(): String? = refreshTokenHolder
+
+    suspend fun applyCloudAvatarUrl(avatarUrl: String?) {
+        if (avatarUrl.isNullOrBlank()) return
+        val user = _currentUser.value ?: return
+        if (user.photoUrl == avatarUrl) return
+        val updated = user.copy(photoUrl = avatarUrl)
+        _currentUser.value = updated
+        _authState.value = AuthState.Authenticated(updated)
+        val app = com.ysxq.app.App.instance ?: return
+        try {
+            app.userPreferences().saveUserLogin(updated)
+            com.ysxq.app.data.storage.CloudBaseStorageHelper.resolveAvatarUrl(avatarUrl)?.let { resolved ->
+                app.userPreferences().saveResolvedAvatarUrl(resolved)
+            }
+        } catch (_: Exception) { }
+    }
+
+    suspend fun applyCloudDisplayName(displayName: String?) {
+        if (displayName.isNullOrBlank()) return
+        val user = _currentUser.value ?: return
+        if (user.displayName == displayName) return
+        val updated = user.copy(displayName = displayName)
+        _currentUser.value = updated
+        _authState.value = AuthState.Authenticated(updated)
+        val app = com.ysxq.app.App.instance ?: return
+        try {
+            app.userPreferences().saveUserLogin(updated)
+        } catch (_: Exception) { }
+    }
 
     private val refreshLock = Any()
 
@@ -352,7 +404,7 @@ object AuthRepository {
             email = email ?: "",
             phone = phoneNumber ?: "",
             displayName = name ?: username ?: email?.substringBefore("@") ?: "用户",
-            photoUrl = picture,
+            photoUrl = picture ?: avatarUrl,
             isEmailVerified = emailVerified ?: (email != null)
         )
     }

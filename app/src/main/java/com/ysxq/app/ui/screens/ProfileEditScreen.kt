@@ -105,9 +105,13 @@ fun ProfileEditScreen(
                 val rawPhotoUrl = user?.photoUrl
                 var resolvedFallback by remember(rawPhotoUrl) { mutableStateOf<String?>(null) }
                 LaunchedEffect(rawPhotoUrl) {
-                    resolvedFallback = CloudBaseStorageHelper.resolveAvatarUrl(rawPhotoUrl)
+                    val resolved = CloudBaseStorageHelper.resolveAvatarUrl(rawPhotoUrl)
+                    if (resolved != null) {
+                        resolvedFallback = resolved
+                        viewModel.savePersistedAvatarUrl(resolved)
+                    }
                 }
-                val displayUrl = uiState.cloudAvatarUrl ?: resolvedFallback
+                val displayUrl = uiState.cloudAvatarUrl ?: resolvedFallback ?: uiState.persistedResolvedUrl
 
                 if (displayUri != null) {
                     AsyncImage(
@@ -130,22 +134,12 @@ fun ProfileEditScreen(
                             .background(SakuraPrimary.copy(alpha = 0.2f)),
                         contentAlignment = Alignment.Center
                     ) {
-                        val initial = (uiState.editNickname.take(1).ifBlank { "" })
-                        if (initial.isNotEmpty()) {
-                            Text(
-                                text = initial,
-                                color = SakuraPrimary,
-                                fontSize = 40.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Filled.Person,
-                                contentDescription = "头像",
-                                tint = SakuraPrimary,
-                                modifier = Modifier.size(48.dp)
-                            )
-                        }
+                        Icon(
+                            imageVector = Icons.Filled.Person,
+                            contentDescription = "头像",
+                            tint = SakuraPrimary,
+                            modifier = Modifier.size(48.dp)
+                        )
                     }
                 }
 
@@ -279,7 +273,7 @@ fun ProfileEditScreen(
 
             Button(
                 onClick = { viewModel.saveProfile() },
-                enabled = !uiState.isSaving,
+                enabled = !uiState.isSaving && !uiState.isUploadingAvatar,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp)
@@ -300,6 +294,8 @@ fun ProfileEditScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("保存中...", color = Color.White, fontWeight = FontWeight.Medium)
+                } else if (uiState.isUploadingAvatar) {
+                    Text("头像上传中...", color = Color.White.copy(alpha = 0.6f), fontWeight = FontWeight.Medium, fontSize = 16.sp)
                 } else {
                     Text("保存修改", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 }

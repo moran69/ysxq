@@ -9,6 +9,7 @@ import com.ysxq.app.data.auth.AuthState
 import com.ysxq.app.data.auth.UiState
 import com.ysxq.app.data.auth.User
 import com.ysxq.app.data.local.userPreferences
+import com.ysxq.app.data.sync.ProfileSyncRepository
 import com.ysxq.app.data.storage.CloudBaseStorageHelper
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -137,6 +138,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                         val nickname = generateNickname()
                         AuthRepository.updateProfile(displayName = nickname)
                         uploadDefaultAvatar(user)
+                        ProfileSyncRepository().saveDisplayNameToCloud(nickname)
                         prefs.saveUserLogin(
                             AuthRepository.currentUser ?: user,
                             AuthRepository.getAccessToken(),
@@ -166,6 +168,12 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 .onSuccess { result ->
                     AuthRepository.updateProfile(photoUri = Uri.parse(result.fileId))
                     CloudBaseStorageHelper.cacheResolvedUrl(result.fileId, result.downloadUrl)
+                    ProfileSyncRepository().saveAvatarToCloud(result.fileId)
+                    prefs.saveUserLogin(
+                        AuthRepository.currentUser ?: user,
+                        AuthRepository.getAccessToken(),
+                        AuthRepository.getRefreshToken()
+                    )
                 }
         } catch (_: Exception) { }
     }
