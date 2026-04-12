@@ -189,28 +189,37 @@ object AuthRepository {
                 ?: return Result.failure(Exception(response.getErrorMessage() ?: "获取用户信息失败"))
             val user = info.toDomainUser()
                 ?: return Result.failure(Exception("用户信息不完整（缺少uid）"))
-            // Preserve avatar URL if API doesn't return it in 'picture' field
-            // (updateProfile sends 'avatar_url' but getUserProfile returns 'picture')
             val preservedUser = if (user.photoUrl.isNullOrBlank() && !_currentUser.value?.photoUrl.isNullOrBlank()) {
                 user.copy(photoUrl = _currentUser.value?.photoUrl)
             } else {
                 user
             }
-            _currentUser.value = preservedUser
-            _authState.value = AuthState.Authenticated(preservedUser)
-            // Save to DataStore so the preserved URL persists
+            val finalUser = if (preservedUser.photoUrl.isNullOrBlank()) {
+                try {
+                    val profile = com.ysxq.app.data.sync.ProfileSyncRepository().loadProfileFromCloud()
+                    if (profile != null && !profile.first.isNullOrBlank()) {
+                        preservedUser.copy(photoUrl = profile.first)
+                    } else {
+                        preservedUser
+                    }
+                } catch (_: Exception) { preservedUser }
+            } else {
+                preservedUser
+            }
+            _currentUser.value = finalUser
+            _authState.value = AuthState.Authenticated(finalUser)
             val app = com.ysxq.app.App.instance
             if (app != null) {
                 val prefs = app.userPreferences()
-                prefs.saveUserLogin(preservedUser)
-                if (!preservedUser.photoUrl.isNullOrBlank() && preservedUser.photoUrl.startsWith("cloud://")) {
-                    val resolved = com.ysxq.app.data.storage.CloudBaseStorageHelper.resolveAvatarUrl(preservedUser.photoUrl)
+                prefs.saveUserLogin(finalUser)
+                if (!finalUser.photoUrl.isNullOrBlank() && finalUser.photoUrl.startsWith("cloud://")) {
+                    val resolved = com.ysxq.app.data.storage.CloudBaseStorageHelper.resolveAvatarUrl(finalUser.photoUrl)
                     if (resolved != null) {
                         prefs.saveResolvedAvatarUrl(resolved)
                     }
                 }
             }
-            Result.success(preservedUser)
+            Result.success(finalUser)
         } catch (e: Exception) {
             Result.failure(mapError(e))
         }
@@ -275,10 +284,15 @@ object AuthRepository {
     fun getAccessToken(): String? = accessTokenHolder.value
     fun getRefreshToken(): String? = refreshTokenHolder
 
+    /**
+     * Apply avatar URL from cloud database (user_profiles) as fallback.
+     * Only overwrites if current user has NO avatar — does not replace
+     * a valid avatar from auth service with null/blank from DB.
+     */
     suspend fun applyCloudAvatarUrl(avatarUrl: String?) {
         if (avatarUrl.isNullOrBlank()) return
         val user = _currentUser.value ?: return
-        if (user.photoUrl == avatarUrl) return
+        if (!user.photoUrl.isNullOrBlank()) return
         val updated = user.copy(photoUrl = avatarUrl)
         _currentUser.value = updated
         _authState.value = AuthState.Authenticated(updated)
