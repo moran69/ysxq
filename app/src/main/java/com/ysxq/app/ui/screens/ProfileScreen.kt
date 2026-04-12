@@ -50,10 +50,15 @@ fun ProfileScreen(
     val persistedResolvedUrl by viewModel.resolvedAvatarUrl.collectAsState()
     var resolvedPhotoUrl by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(photoUrl) {
-        val resolved = CloudBaseStorageHelper.resolveAvatarUrl(photoUrl)
-        if (resolved != null) {
-            resolvedPhotoUrl = resolved
-            viewModel.updatePersistedAvatarUrl(resolved)
+        if (photoUrl != null && !photoUrl.startsWith("cloud://")) {
+            resolvedPhotoUrl = photoUrl
+            viewModel.updatePersistedAvatarUrl(photoUrl)
+        } else {
+            val resolved = CloudBaseStorageHelper.resolveAvatarUrl(photoUrl)
+            if (resolved != null) {
+                resolvedPhotoUrl = resolved
+                viewModel.updatePersistedAvatarUrl(resolved)
+            }
         }
     }
     val displayAvatarUrl = resolvedPhotoUrl ?: persistedResolvedUrl

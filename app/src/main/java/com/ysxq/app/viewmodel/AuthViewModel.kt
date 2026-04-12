@@ -141,8 +141,10 @@ class AuthViewModel(application: Application, private val savedStateHandle: Save
                             prefs.saveUserLogin(user, AuthRepository.getAccessToken(), AuthRepository.getRefreshToken())
                             if (user.photoUrl.isNullOrBlank()) {
                                 uploadDefaultAvatar(user)
+                            } else if (user.photoUrl.startsWith("cloud://")) {
+                                resolveAndPersistAvatar(user.photoUrl)
                             }
-                            _authResultState.value = UiState.Success(user)
+                            _authResultState.value = UiState.Success(AuthRepository.currentUser ?: user)
                         }
                         .onFailure { _authResultState.value = UiState.Error(it.message ?: "登录失败") }
                 } else {
@@ -190,12 +192,25 @@ class AuthViewModel(application: Application, private val savedStateHandle: Save
                     AuthRepository.updateProfile(photoUri = Uri.parse(result.fileId))
                     CloudBaseStorageHelper.cacheResolvedUrl(result.fileId, result.downloadUrl)
                     ProfileSyncRepository().saveAvatarToCloud(result.fileId)
+                    prefs.saveResolvedAvatarUrl(result.downloadUrl)
                     prefs.saveUserLogin(
                         AuthRepository.currentUser ?: user,
                         AuthRepository.getAccessToken(),
                         AuthRepository.getRefreshToken()
                     )
                 }
+        } catch (_: Exception) { }
+    }
+
+    private suspend fun resolveAndPersistAvatar(cloudUrl: String) {
+        try {
+            val resolved = CloudBaseStorageHelper.resolveAvatarUrl(cloudUrl)
+            if (resolved != null) {
+                prefs.saveResolvedAvatarUrl(resolved)
+                AuthRepository.currentUser?.let { user ->
+                    prefs.saveUserLogin(user, AuthRepository.getAccessToken(), AuthRepository.getRefreshToken())
+                }
+            }
         } catch (_: Exception) { }
     }
 

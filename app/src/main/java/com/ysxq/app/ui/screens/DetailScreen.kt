@@ -72,6 +72,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ProcessLifecycleOwner
+import android.net.wifi.WifiManager
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -107,6 +108,17 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 
+private suspend fun searchDlnaDevices(context: Context): List<DLNACast.Device> {
+    val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+    val multicastLock = wifiManager.createMulticastLock("dlna-discovery")
+    multicastLock.acquire()
+    return try {
+        DLNACast.search(timeout = 5000)
+    } finally {
+        multicastLock.release()
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DetailScreen(
@@ -141,6 +153,11 @@ fun DetailScreen(
     var speedBeforeLongPress by remember { mutableFloatStateOf(1f) }
     var showLoginDialog by remember { mutableStateOf(false) }
     var deviceOrientation by remember { mutableIntStateOf(context.resources.configuration.orientation) }
+    var castDeviceName by remember { mutableStateOf<String?>(null) }
+    var castProgress by remember { mutableStateOf("00:00 / 00:00") }
+    var castPlaybackState by remember { mutableStateOf("") }
+    var showDisconnectDialog by remember { mutableStateOf(false) }
+    var castCommandHandler by remember { mutableStateOf<((Int) -> Unit)?>(null) }
 
     val favoritesStore = remember { context.favoritesStore() }
     val watchHistoryStore = remember { context.watchHistoryStore() }
@@ -333,9 +350,11 @@ fun DetailScreen(
         onDispose { context.unregisterComponentCallbacks(callback) }
     }
 
-    LaunchedEffect(hasMediaLoaded, isCasting) {
+    LaunchedEffect(hasMediaLoaded, isCasting, isFullscreen) {
         if (hasMediaLoaded && !isCasting) {
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
+            if (!isFullscreen) {
+                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
+            }
         }
     }
 
@@ -343,6 +362,7 @@ fun DetailScreen(
         if (isCasting || !hasMediaLoaded) return@LaunchedEffect
         if (deviceOrientation == Configuration.ORIENTATION_LANDSCAPE && !isFullscreen) {
             isFullscreen = true
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
             activity?.let { act ->
                 val controller = WindowCompat.getInsetsController(act.window, act.window.decorView)
                 controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -351,6 +371,7 @@ fun DetailScreen(
         } else if (deviceOrientation == Configuration.ORIENTATION_PORTRAIT && isFullscreen) {
             isFullscreen = false
             isLocked = false
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
             activity?.let { act ->
                 WindowCompat.getInsetsController(act.window, act.window.decorView)
                     .show(WindowInsetsCompat.Type.systemBars())
@@ -440,7 +461,7 @@ fun DetailScreen(
         if (isFullscreen) {
             isFullscreen = false
             isLocked = false
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
             activity?.let { act ->
                 WindowCompat.getInsetsController(act.window, act.window.decorView)
                     .show(WindowInsetsCompat.Type.systemBars())
@@ -507,6 +528,33 @@ fun DetailScreen(
         )
     }
 
+    if (showDisconnectDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showDisconnectDialog = false
+            },
+            title = { Text("投屏已断开", color = TextPrimary, fontWeight = FontWeight.Bold) },
+            text = { Text("与设备的连接已断开，请检查网络后重试", color = TextSecondary) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDisconnectDialog = false
+                    showCastSheet = true
+                }) {
+                    Text("重新投屏", color = SakuraPrimary)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showDisconnectDialog = false
+                }) {
+                    Text("关闭", color = TextSecondary)
+                }
+            },
+            containerColor = DarkSurface,
+            shape = RoundedCornerShape(16.dp)
+        )
+    }
+
     DisposableEffect(Unit) {
         onDispose {
             if (isCasting) {
@@ -524,7 +572,7 @@ fun DetailScreen(
                 controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
                 controller.hide(WindowInsetsCompat.Type.systemBars())
             } else {
-                act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
                 controller.show(WindowInsetsCompat.Type.systemBars())
             }
         }
@@ -596,13 +644,24 @@ fun DetailScreen(
             videoTitle = videoName,
             resumePositionMs = exoPlayer.currentPosition,
             onDismiss = { showCastSheet = false },
-            onCastStateChanged = { casting ->
+            onCastStateChanged = { casting, deviceName, progress ->
                 isCasting = casting
+                castDeviceName = deviceName
+                if (casting && progress.isNotEmpty()) castProgress = progress
                 if (casting) {
-                    // Pause local player to save resources while casting
+                    if (isFullscreen) {
+                        isFullscreen = false
+                        isLocked = false
+                        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
+                        activity?.let { act ->
+                            WindowCompat.getInsetsController(act.window, act.window.decorView)
+                                .show(WindowInsetsCompat.Type.systemBars())
+                        }
+                    }
                     exoPlayer.pause()
                 } else {
-                    // Resume local player at TV's last known position
+                    showCastSheet = false
+                    castCommandHandler = null
                     if (lastCastPositionMs > 0 && exoPlayer.contentDuration > 0) {
                         exoPlayer.seekTo(lastCastPositionMs)
                     }
@@ -610,6 +669,14 @@ fun DetailScreen(
                     lastCastPositionMs = 0L
                 }
             },
+            onCastProgressUpdate = { progress, playbackState ->
+                castProgress = progress
+                castPlaybackState = playbackState
+            },
+            onCastDisconnected = {
+                showDisconnectDialog = true
+            },
+            onCastCommandRegistered = { handler -> castCommandHandler = handler },
             onNextEpisode = { viewModel.selectEpisode(viewModel.state.value.currentEpisodeIndex + 1) },
             onPrevEpisode = { viewModel.selectEpisode(viewModel.state.value.currentEpisodeIndex - 1) },
             currentEpisodeIndex = state.currentEpisodeIndex,
@@ -670,7 +737,7 @@ fun DetailScreen(
             onExitFullscreen = {
                 isFullscreen = false
                 isLocked = false
-                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
                 activity?.let { act ->
                     WindowCompat.getInsetsController(act.window, act.window.decorView)
                         .show(WindowInsetsCompat.Type.systemBars())
@@ -728,29 +795,19 @@ fun DetailScreen(
 
                             // Casting overlay: show when casting, pause ExoPlayer to save resources
                             if (isCasting) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .background(Color.Black.copy(alpha = 0.75f))
-                                        .clickable(
-                                            indication = null,
-                                            interactionSource = remember { MutableInteractionSource() }
-                                        ) { showCastSheet = true },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                        Icon(
-                                            Icons.Filled.Tv,
-                                            contentDescription = null,
-                                            tint = SakuraPrimary,
-                                            modifier = Modifier.size(40.dp)
-                                        )
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Text("正在投屏中", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text("点击管理投屏", color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp)
-                                    }
-                                }
+                                CastingControlPanel(
+                                    videoTitle = video.name,
+                                    episodeName = state.sources.getOrNull(state.currentSourceIndex)
+                                        ?.episodes?.getOrNull(state.currentEpisodeIndex)?.name ?: "",
+                                    deviceName = castDeviceName ?: "设备",
+                                    progress = castProgress,
+                                    playbackState = castPlaybackState,
+                                    currentEpisodeIndex = state.currentEpisodeIndex,
+                                    totalEpisodes = state.sources.getOrNull(state.currentSourceIndex)?.episodes?.size ?: 0,
+                                    onPrevEpisode = { castCommandHandler?.invoke(-1) },
+                                    onStopCast = { castCommandHandler?.invoke(0) },
+                                    onNextEpisode = { castCommandHandler?.invoke(1) }
+                                )
                             }
 
                             if (currentUrl != null && isBuffering) {
@@ -792,6 +849,7 @@ fun DetailScreen(
                                 }
                             }
 
+                            if (!isCasting) {
                             if (currentUrl != null) {
                                 InlinePlayerGestureOverlay(
                                     exoPlayer = exoPlayer,
@@ -820,7 +878,23 @@ fun DetailScreen(
                                 )
                             }
 
-                            if (showControls || !isPlaying) {
+        if (showControls && isLocked) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(24.dp))
+                    .padding(horizontal = 20.dp, vertical = 10.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Lock, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("屏幕已锁定", color = Color.White, fontSize = 13.sp)
+                }
+            }
+        }
+
+        if (!isLocked && (showControls || !isPlaying)) {
                                 Box(modifier = Modifier.fillMaxSize()) {
                                     Row(
                                         modifier = Modifier
@@ -883,6 +957,7 @@ fun DetailScreen(
                                         }
                                     }
                                 }
+                            }
                             }
                         }
 
@@ -1138,7 +1213,7 @@ private fun FullscreenPlayer(
                         onDragCancel = { }
                     )
                 }
-                .pointerInput(Unit) {
+                .pointerInput(isLocked) {
                     awaitEachGesture {
                         val firstDown = awaitFirstDown(requireUnconsumed = false)
                         val firstUp = withTimeoutOrNull(300L) {
@@ -1149,17 +1224,21 @@ private fun FullscreenPlayer(
                             waitForUpOrCancellation()
                             onLongPressSpeedChanged(false)
                         } else {
-                            val secondDown = withTimeoutOrNull(300L) {
-                                awaitPointerEvent(PointerEventPass.Main)
-                                currentEvent.changes.firstOrNull()?.let {
-                                    if (it.pressed) it else null
-                                }
-                            }
-                            if (secondDown != null) {
-                                waitForUpOrCancellation()
-                                onTogglePlayPause()
-                            } else {
+                            if (isLocked) {
                                 onToggleControls()
+                            } else {
+                                val secondDown = withTimeoutOrNull(300L) {
+                                    awaitPointerEvent(PointerEventPass.Main)
+                                    currentEvent.changes.firstOrNull()?.let {
+                                        if (it.pressed) it else null
+                                    }
+                                }
+                                if (secondDown != null) {
+                                    waitForUpOrCancellation()
+                                    onTogglePlayPause()
+                                } else {
+                                    onToggleControls()
+                                }
                             }
                         }
                     }
@@ -1344,22 +1423,6 @@ private fun FullscreenPlayer(
                             ) {
                                 Icon(Icons.Filled.PlayArrow, null, tint = DarkBackground, modifier = Modifier.size(36.dp))
                             }
-                        }
-                    }
-                }
-
-                if (isLocked && showControls) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(24.dp))
-                            .padding(horizontal = 20.dp, vertical = 10.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Filled.Lock, null, tint = Color.White, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("屏幕已锁定", color = Color.White, fontSize = 13.sp)
                         }
                     }
                 }
@@ -1774,6 +1837,149 @@ private fun InfoRow(label: String, value: String, maxLines: Int = 1) {
     }
 }
 
+@Composable
+private fun CastingControlPanel(
+    videoTitle: String,
+    episodeName: String,
+    deviceName: String,
+    progress: String,
+    playbackState: String,
+    currentEpisodeIndex: Int,
+    totalEpisodes: Int,
+    onPrevEpisode: () -> Unit,
+    onStopCast: () -> Unit,
+    onNextEpisode: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                Icons.Filled.Tv,
+                contentDescription = null,
+                tint = SakuraPrimary,
+                modifier = Modifier.size(56.dp)
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                "投屏中",
+                color = SakuraPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                deviceName,
+                color = Color.White.copy(alpha = 0.9f),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                videoTitle,
+                color = TextPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+            if (episodeName.isNotBlank()) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    episodeName,
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                progress,
+                color = TextSecondary,
+                fontSize = 13.sp
+            )
+            if (playbackState.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    playbackState,
+                    color = TextTertiary,
+                    fontSize = 11.sp
+                )
+            }
+            Spacer(modifier = Modifier.height(20.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(
+                    onClick = onPrevEpisode,
+                    enabled = currentEpisodeIndex > 0,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .background(DarkSurfaceVariant, CircleShape)
+                ) {
+                    Icon(
+                        Icons.Filled.SkipPrevious,
+                        contentDescription = "上一集",
+                        tint = if (currentEpisodeIndex > 0) SakuraPrimary else TextTertiary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                IconButton(
+                    onClick = onStopCast,
+                    modifier = Modifier
+                        .size(56.dp)
+                        .background(Color(0xFFFF5252), CircleShape)
+                ) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = "停止投屏",
+                        tint = Color.White,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+                IconButton(
+                    onClick = onNextEpisode,
+                    enabled = currentEpisodeIndex < totalEpisodes - 1,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .background(DarkSurfaceVariant, CircleShape)
+                ) {
+                    Icon(
+                        Icons.Filled.SkipNext,
+                        contentDescription = "下一集",
+                        tint = if (currentEpisodeIndex < totalEpisodes - 1) SakuraPrimary else TextTertiary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+            if (totalEpisodes > 1) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "第 ${currentEpisodeIndex + 1} / $totalEpisodes 集",
+                    color = TextTertiary,
+                    fontSize = 12.sp
+                )
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CastDeviceSheet(
@@ -1781,7 +1987,10 @@ private fun CastDeviceSheet(
     videoTitle: String,
     resumePositionMs: Long,
     onDismiss: () -> Unit,
-    onCastStateChanged: (Boolean) -> Unit,
+    onCastStateChanged: (Boolean, String?, String) -> Unit,
+    onCastProgressUpdate: (String, String) -> Unit,
+    onCastDisconnected: () -> Unit,
+    onCastCommandRegistered: (((Int) -> Unit) -> Unit)?,
     onNextEpisode: () -> Unit,
     onPrevEpisode: () -> Unit,
     currentEpisodeIndex: Int,
@@ -1811,7 +2020,6 @@ private fun CastDeviceSheet(
     var pendingSwitchDirection by remember { mutableStateOf<Int?>(null) }
 
     var isStopInProgress by remember { mutableStateOf(false) }
-    var showDisconnectDialog by remember { mutableStateOf(false) }
 
     val stopCasting: () -> Unit = lambda@{
         if (isStopInProgress) return@lambda
@@ -1820,7 +2028,7 @@ private fun CastDeviceSheet(
         isCasting = false
         castingDeviceName = null
         castingDevice = null
-        onCastStateChanged(false)
+        onCastStateChanged(false, null, "")
         val sid = connectedSessionId
         val server = proxyServer
         connectedSessionId = null
@@ -1837,6 +2045,16 @@ private fun CastDeviceSheet(
         onStopCastingRegistered(stopCasting)
     }
 
+    SideEffect {
+        onCastCommandRegistered?.invoke { action ->
+            when (action) {
+                -1 -> pendingSwitchDirection = -1
+                0 -> stopCasting()
+                1 -> pendingSwitchDirection = 1
+            }
+        }
+    }
+
     DisposableEffect(Unit) {
         onDispose {
             userStopped = true
@@ -1847,15 +2065,16 @@ private fun CastDeviceSheet(
         isSearching = true
         castError = null
         try {
-            devices = DLNACast.search(timeout = 5000)
+            devices = searchDlnaDevices(context)
         } catch (_: Exception) {
             castError = "搜索设备失败，请确保手机与电视在同一WiFi网络"
         }
         isSearching = false
     }
 
+    if (!isCasting) {
     ModalBottomSheet(
-        onDismissRequest = { if (!isCasting) onDismiss() },
+        onDismissRequest = onDismiss,
         containerColor = DarkSurface,
         shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
     ) {
@@ -1876,105 +2095,8 @@ private fun CastDeviceSheet(
 
             when {
                 isCasting -> {
-                    // Casting in progress UI
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Icon(
-                            Icons.Filled.Tv,
-                            contentDescription = null,
-                            tint = SakuraPrimary,
-                            modifier = Modifier.size(48.dp)
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            castingDeviceName ?: "设备",
-                            color = TextPrimary,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            castProgress,
-                            color = TextSecondary,
-                            fontSize = 13.sp
-                        )
-                        if (castPlaybackState.isNotEmpty()) {
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                "状态: $castPlaybackState",
-                                color = TextTertiary,
-                                fontSize = 12.sp
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Button(
-                            onClick = {
-                                stopCasting()
-                                scope.launch {
-                                    isSearching = true
-                                    castError = null
-                                    try { devices = DLNACast.search(timeout = 5000) }
-                                    catch (_: Exception) { castError = "搜索失败" }
-                                    isSearching = false
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFF2D2D3D),
-                                contentColor = Color(0xFFFF5252)
-                            ),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Filled.Close, null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("断开连接", fontSize = 14.sp)
-                        }
-
-                        if (totalEpisodes > 1) {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                "第 ${currentEpisodeIndex + 1} / $totalEpisodes 集",
-                                color = TextTertiary,
-                                fontSize = 12.sp,
-                                modifier = Modifier.fillMaxWidth(),
-                                textAlign = TextAlign.Center
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                OutlinedButton(
-                                    onClick = {
-                                        pendingSwitchDirection = -1
-                                    },
-                                    enabled = currentEpisodeIndex > 0 && !isSwitchingEpisode,
-                                    modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(10.dp),
-                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = SakuraPrimary)
-                                ) {
-                                    Icon(Icons.Filled.SkipPrevious, null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("上一集", fontSize = 13.sp)
-                                }
-                                OutlinedButton(
-                                    onClick = {
-                                        pendingSwitchDirection = 1
-                                    },
-                                    enabled = currentEpisodeIndex < totalEpisodes - 1 && !isSwitchingEpisode,
-                                    modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(10.dp),
-                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = SakuraPrimary)
-                                ) {
-                                    Text("下一集", fontSize = 13.sp)
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Icon(Icons.Filled.SkipNext, null, modifier = Modifier.size(16.dp))
-                                }
-                            }
-                        }
-                    }
+                    // Casting is managed by CastingControlPanel in the main screen.
+                    // CastDeviceSheet stays mounted for polling/effects but hides the bottom sheet.
                 }
                 videoUrl == null -> {
                     Box(modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp), contentAlignment = Alignment.Center) {
@@ -2082,7 +2204,7 @@ private fun CastDeviceSheet(
                                                     isCasting = true
                                                     connectedSessionId = proxySession.sessionId
                                                     isConnecting = false
-                                                    onCastStateChanged(true)
+                                                    onCastStateChanged(true, castingDeviceName, castProgress)
 
                                                     // switchEpisode helper — stops current cast, switches episode, creates new session, re-casts
                                                     suspend fun switchEpisode(isNext: Boolean): Boolean {
@@ -2158,6 +2280,7 @@ private fun CastDeviceSheet(
                                                                 val currentMs = prog.first
                                                                 val totalMs = prog.second
                                                                 castProgress = "${formatMs(currentMs)} / ${formatMs(totalMs)}"
+                                                                onCastProgressUpdate(castProgress, castPlaybackState)
 
                                                                 // Auto-next when near end
                                                                 if (totalMs > 0 && currentMs >= totalMs - 3000 && currentEpisodeIndex < totalEpisodes - 1) {
@@ -2175,6 +2298,7 @@ private fun CastDeviceSheet(
                                                             }
                                                             val st = DLNACast.getState()
                                                             castPlaybackState = st.playbackState.name
+                                                            onCastProgressUpdate(castProgress, castPlaybackState)
 
                                                             // Detect TV playback stopped (not user-initiated)
                                                             // Require 2 consecutive STOPPED states to avoid false triggers
@@ -2183,7 +2307,7 @@ private fun CastDeviceSheet(
                                                                 if (stoppedCount >= 2 && currentEpisodeIndex < totalEpisodes - 1) {
                                                                     shouldAutoNext = true
                                                                 } else if (stoppedCount >= 3) {
-                                                                    showDisconnectDialog = true
+                                                                    onCastDisconnected()
                                                                 }
                                                             } else {
                                                                 stoppedCount = 0
@@ -2197,7 +2321,7 @@ private fun CastDeviceSheet(
                                                             }
                                                         } catch (_: Exception) {
                                                             if (!userStopped && isCasting) {
-                                                                showDisconnectDialog = true
+                                                                onCastDisconnected()
                                                             }
                                                         }
                                                     }
@@ -2279,7 +2403,7 @@ private fun CastDeviceSheet(
                         scope.launch {
                             isSearching = true
                             castError = null
-                            try { devices = DLNACast.search(timeout = 5000) }
+                            try { devices = searchDlnaDevices(context) }
                             catch (_: Exception) { castError = "搜索失败" }
                             isSearching = false
                         }
@@ -2295,65 +2419,6 @@ private fun CastDeviceSheet(
             }
         }
     }
-
-    if (showDisconnectDialog) {
-        AlertDialog(
-            onDismissRequest = { showDisconnectDialog = false },
-            containerColor = DarkSurface,
-            title = { Text("投屏已断开", color = TextPrimary, fontWeight = FontWeight.Bold) },
-            text = { Text("与设备的连接已断开，请检查网络后重试", color = TextSecondary) },
-            confirmButton = {
-                TextButton(onClick = {
-                    showDisconnectDialog = false
-                    val dev = currentCastDevice
-                    if (dev != null && !isCasting) {
-                        castingDevice = dev.id
-                        castingDeviceName = dev.name
-                        isConnecting = true
-                        castError = null
-                        userStopped = false
-                        scope.launch {
-                            try {
-                                DlnaProxyService.start(context)
-                                delay(100)
-                                val sm = DlnaProxyService.sessionManager
-                                    ?: throw IllegalStateException("代理服务未就绪")
-                                val url = getEpisodeUrl()
-                                if (url == null) throw IllegalStateException("无法获取播放地址")
-                                val ps = withContext(Dispatchers.IO) {
-                                    sm.createSession(url, 0L)
-                                }
-                                val srv = proxyServer ?: DlnaProxyServer().also {
-                                    it.start()
-                                    proxyServer = it
-                                }
-                                val pUrl = srv.getStreamUrl(ps.sessionId)
-                                val ok = DLNACast.castToDevice(dev, pUrl, videoTitle)
-                                if (ok) {
-                                    isCasting = true
-                                    connectedSessionId = ps.sessionId
-                                    isConnecting = false
-                                    onCastStateChanged(true)
-                                } else {
-                                    throw IllegalStateException("投屏连接失败")
-                                }
-                            } catch (e: Exception) {
-                                castError = e.message ?: "重连失败"
-                                isConnecting = false
-                                castingDevice = null
-                                castingDeviceName = null
-                            }
-                        }
-                    }
-                }) { Text("重新连接", color = SakuraPrimary) }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showDisconnectDialog = false
-                    stopCasting()
-                }) { Text("停止投屏", color = TextSecondary) }
-            }
-        )
     }
 }
 
