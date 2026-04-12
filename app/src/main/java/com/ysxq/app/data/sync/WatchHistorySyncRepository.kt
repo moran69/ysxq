@@ -163,54 +163,62 @@ class WatchHistorySyncRepository(
         }
     }
 
-    suspend fun pullFromCloud() {
-        syncMutex.withLock {
+    suspend fun pullFromCloud(): Result<Boolean> {
+        return syncMutex.withLock {
             withContext(Dispatchers.IO) {
-                val token = AuthRepository.getAccessToken() ?: return@withContext
-            val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
-            try {
-                val response = api.list(
-                    "Bearer $token",
-                    MODEL_NAME,
-                    CloudBaseDbListRequest(
-                        filter = CloudBaseDbFilter(
-                            where = mapOf("uid" to buildJsonObject { put("\$eq", uid) })
-                        ),
-                        orderBy = listOf(buildJsonObject { put("updatedAt", "desc") }),
-                        pageSize = 100,
-                        pageNumber = 1,
-                        getCount = false
-                    )
-                )
-                val listErr = response.getErrorMessage()
-                if (listErr != null) {
-                    Log.e(TAG, "从云端拉取历史失败: $listErr")
-                    return@withContext
+                val token = AuthRepository.getAccessToken()
+                if (token == null) {
+                    return@withContext Result.success(false)
                 }
-                val records = response.data?.records ?: return@withContext
-                val cloudEntries = records.mapNotNull { obj ->
-                    try {
-                        WatchHistoryEntry(
-                            videoId = obj["videoId"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null,
-                            videoName = obj["videoName"]?.jsonPrimitive?.contentOrNull ?: "",
-                            pic = obj["pic"]?.jsonPrimitive?.contentOrNull ?: "",
-                            typeName = obj["typeName"]?.jsonPrimitive?.contentOrNull ?: "",
-                            remarks = obj["remarks"]?.jsonPrimitive?.contentOrNull ?: "",
-                            episodeIndex = obj["episodeIndex"]?.jsonPrimitive?.intOrNull ?: 0,
-                            episodeName = obj["episodeName"]?.jsonPrimitive?.contentOrNull ?: "",
-                            positionMs = obj["positionMs"]?.jsonPrimitive?.longOrNull ?: 0L,
-                            durationMs = obj["durationMs"]?.jsonPrimitive?.longOrNull ?: 0L,
-                            updatedAt = obj["updatedAt"]?.jsonPrimitive?.longOrNull ?: System.currentTimeMillis()
+                val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() }
+                if (uid == null) {
+                    return@withContext Result.success(false)
+                }
+                try {
+                    val response = api.list(
+                        "Bearer $token",
+                        MODEL_NAME,
+                        CloudBaseDbListRequest(
+                            filter = CloudBaseDbFilter(
+                                where = mapOf("uid" to buildJsonObject { put("\$eq", uid) })
+                            ),
+                            orderBy = listOf(buildJsonObject { put("updatedAt", "desc") }),
+                            pageSize = 100,
+                            pageNumber = 1,
+                            getCount = false
                         )
-                    } catch (_: Exception) { null }
-                }
+                    )
+                    val listErr = response.getErrorMessage()
+                    if (listErr != null) {
+                        Log.e(TAG, "从云端拉取历史失败: $listErr")
+                        return@withContext Result.failure(Exception(listErr))
+                    }
+                    val records = response.data?.records ?: return@withContext Result.success(true)
+                    val cloudEntries = records.mapNotNull { obj ->
+                        try {
+                            WatchHistoryEntry(
+                                videoId = obj["videoId"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null,
+                                videoName = obj["videoName"]?.jsonPrimitive?.contentOrNull ?: "",
+                                pic = obj["pic"]?.jsonPrimitive?.contentOrNull ?: "",
+                                typeName = obj["typeName"]?.jsonPrimitive?.contentOrNull ?: "",
+                                remarks = obj["remarks"]?.jsonPrimitive?.contentOrNull ?: "",
+                                episodeIndex = obj["episodeIndex"]?.jsonPrimitive?.intOrNull ?: 0,
+                                episodeName = obj["episodeName"]?.jsonPrimitive?.contentOrNull ?: "",
+                                positionMs = obj["positionMs"]?.jsonPrimitive?.longOrNull ?: 0L,
+                                durationMs = obj["durationMs"]?.jsonPrimitive?.longOrNull ?: 0L,
+                                updatedAt = obj["updatedAt"]?.jsonPrimitive?.longOrNull ?: System.currentTimeMillis()
+                            )
+                        } catch (_: Exception) { null }
+                    }
 
-                val localEntries = historyStore.history.first()
-                val merged = mergeHistory(localEntries, cloudEntries)
-                historyStore.replaceAll(merged)
-            } catch (e: Exception) {
-                Log.w(TAG, "从云端拉取历史失败: ${e.message}")
-            }
+                    val localEntries = historyStore.history.first()
+                    val merged = mergeHistory(localEntries, cloudEntries)
+                    historyStore.replaceAll(merged)
+                    Result.success(true)
+                } catch (e: Exception) {
+                    Log.w(TAG, "从云端拉取历史失败: ${e.message}")
+                    Result.failure(e)
+                }
             }
         }
     }

@@ -160,64 +160,72 @@ class FavoritesSyncRepository(
         }
     }
 
-    suspend fun pullFromCloud() {
-        syncMutex.withLock {
+    suspend fun pullFromCloud(): Result<Boolean> {
+        return syncMutex.withLock {
             withContext(Dispatchers.IO) {
-                val token = AuthRepository.getAccessToken() ?: return@withContext
-            val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
-            try {
-                val response = api.list(
-                    "Bearer $token",
-                    MODEL_NAME,
-                    CloudBaseDbListRequest(
-                        filter = CloudBaseDbFilter(
-                            where = mapOf("uid" to buildJsonObject { put("\$eq", uid) })
-                        ),
-                        orderBy = listOf(buildJsonObject { put("addedAt", "desc") }),
-                        pageSize = 200,
-                        pageNumber = 1,
-                        getCount = false
-                    )
-                )
-                val listErr = response.getErrorMessage()
-                if (listErr != null) {
-                    Log.e(TAG, "从云端拉取收藏失败: $listErr")
-                    return@withContext
+                val token = AuthRepository.getAccessToken()
+                if (token == null) {
+                    return@withContext Result.success(false)
                 }
-                val records = response.data?.records ?: return@withContext
-                val cloudItems = records.mapNotNull { obj ->
-                    try {
-                        FavoriteItem(
-                            id = obj["id"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null,
-                            name = obj["name"]?.jsonPrimitive?.contentOrNull ?: "",
-                            pic = obj["pic"]?.jsonPrimitive?.contentOrNull ?: "",
-                            typeName = obj["typeName"]?.jsonPrimitive?.contentOrNull ?: "",
-                            remarks = obj["remarks"]?.jsonPrimitive?.contentOrNull ?: "",
-                            year = obj["year"]?.jsonPrimitive?.contentOrNull ?: "",
-                            area = obj["area"]?.jsonPrimitive?.contentOrNull ?: "",
-                            addedAt = obj["addedAt"]?.jsonPrimitive?.longOrNull ?: System.currentTimeMillis()
+                val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() }
+                if (uid == null) {
+                    return@withContext Result.success(false)
+                }
+                try {
+                    val response = api.list(
+                        "Bearer $token",
+                        MODEL_NAME,
+                        CloudBaseDbListRequest(
+                            filter = CloudBaseDbFilter(
+                                where = mapOf("uid" to buildJsonObject { put("\$eq", uid) })
+                            ),
+                            orderBy = listOf(buildJsonObject { put("addedAt", "desc") }),
+                            pageSize = 200,
+                            pageNumber = 1,
+                            getCount = false
                         )
-                    } catch (_: Exception) { null }
+                    )
+                    val listErr = response.getErrorMessage()
+                    if (listErr != null) {
+                        Log.e(TAG, "从云端拉取收藏失败: $listErr")
+                        return@withContext Result.failure(Exception(listErr))
+                    }
+                    val records = response.data?.records ?: return@withContext Result.success(true)
+                    val cloudItems = records.mapNotNull { obj ->
+                        try {
+                            FavoriteItem(
+                                id = obj["id"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null,
+                                name = obj["name"]?.jsonPrimitive?.contentOrNull ?: "",
+                                pic = obj["pic"]?.jsonPrimitive?.contentOrNull ?: "",
+                                typeName = obj["typeName"]?.jsonPrimitive?.contentOrNull ?: "",
+                                remarks = obj["remarks"]?.jsonPrimitive?.contentOrNull ?: "",
+                                year = obj["year"]?.jsonPrimitive?.contentOrNull ?: "",
+                                area = obj["area"]?.jsonPrimitive?.contentOrNull ?: "",
+                                addedAt = obj["addedAt"]?.jsonPrimitive?.longOrNull ?: System.currentTimeMillis()
+                            )
+                        } catch (_: Exception) { null }
+                    }
+
+                    val localItems = favoritesStore.favorites.first()
+                    val localIds = localItems.map { it.id }.toSet()
+                    val newFromCloud = cloudItems.filter { it.id !in localIds }
+
+                    val cloudIds = cloudItems.map { it.id }.toSet()
+                    val localOnly = localItems.filter { it.id !in cloudIds }
+
+                    if (newFromCloud.isNotEmpty()) {
+                        val merged = (localItems + newFromCloud).sortedByDescending { it.addedAt }
+                        favoritesStore.replaceAll(merged)
+                    }
+
+                    for (localItem in localOnly) {
+                        upsertToCloud(localItem)
+                    }
+                    Result.success(true)
+                } catch (e: Exception) {
+                    Log.w(TAG, "从云端拉取收藏失败: ${e.message}")
+                    Result.failure(e)
                 }
-
-                val localItems = favoritesStore.favorites.first()
-                val localIds = localItems.map { it.id }.toSet()
-                val newFromCloud = cloudItems.filter { it.id !in localIds }
-
-                val cloudIds = cloudItems.map { it.id }.toSet()
-                val localOnly = localItems.filter { it.id !in cloudIds }
-
-                if (newFromCloud.isNotEmpty()) {
-                    val merged = (localItems + newFromCloud).sortedByDescending { it.addedAt }
-                    favoritesStore.replaceAll(merged)
-                }
-
-                for (localItem in localOnly) {
-                    upsertToCloud(localItem)
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "从云端拉取收藏失败: ${e.message}")
-            }
             }
         }
     }

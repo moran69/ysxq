@@ -155,6 +155,27 @@ fun CategoryScreen(
                         )
                     }
                 }
+                state.videos.isEmpty() && !state.isLoading -> {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = "📺",
+                                fontSize = 48.sp
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = "暂无相关视频",
+                                color = TextSecondary,
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                        }
+                    }
+                }
                 else -> {
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(3),

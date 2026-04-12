@@ -44,6 +44,9 @@ class ProfileEditViewModel(application: Application) : AndroidViewModel(applicat
     @Volatile
     private var avatarUploadInProgress = false
 
+    @Volatile
+    private var isUserEditingNickname = false
+
     init {
         viewModelScope.launch {
             authState.collect { state ->
@@ -51,16 +54,15 @@ class ProfileEditViewModel(application: Application) : AndroidViewModel(applicat
                     is AuthState.Authenticated -> {
                         val user = state.user
                         if (avatarUploadInProgress) {
-                            // Don't overwrite cloudAvatarUrl while upload is finishing
                             _uiState.value = _uiState.value.copy(
                                 user = user,
-                                editNickname = user.displayName
+                                editNickname = if (!isUserEditingNickname) user.displayName else _uiState.value.editNickname
                             )
                         } else {
                             val resolvedUrl = CloudBaseStorageHelper.resolveAvatarUrl(user.photoUrl)
                             _uiState.value = _uiState.value.copy(
                                 user = user,
-                                editNickname = user.displayName,
+                                editNickname = if (!isUserEditingNickname) user.displayName else _uiState.value.editNickname,
                                 cloudAvatarUrl = resolvedUrl
                             )
                         }
@@ -85,6 +87,7 @@ class ProfileEditViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun onNicknameChange(name: String) {
+        isUserEditingNickname = true
         _uiState.value = _uiState.value.copy(editNickname = name, error = null)
     }
 
@@ -109,12 +112,13 @@ class ProfileEditViewModel(application: Application) : AndroidViewModel(applicat
                     }
                     CloudBaseStorageHelper.cacheResolvedUrl(uploadResult.fileId, uploadResult.downloadUrl)
                     prefs.saveResolvedAvatarUrl(uploadResult.downloadUrl)
-                    ProfileSyncRepository().saveAvatarToCloud(uploadResult.fileId)
+                    val syncResult = ProfileSyncRepository().saveAvatarToCloud(uploadResult.fileId)
                     avatarUploadInProgress = false
                     _uiState.value = _uiState.value.copy(
                         cloudAvatarUrl = uploadResult.downloadUrl,
                         isUploadingAvatar = false,
-                        localAvatarUri = null
+                        localAvatarUri = null,
+                        error = syncResult.exceptionOrNull()?.message
                     )
                     prefs.clearLocalAvatarUri()
                 } else {
@@ -140,6 +144,14 @@ class ProfileEditViewModel(application: Application) : AndroidViewModel(applicat
             _uiState.value = _uiState.value.copy(error = "昵称不能为空")
             return
         }
+        if (nickname.length < 2) {
+            _uiState.value = _uiState.value.copy(error = "昵称至少需要2个字符")
+            return
+        }
+        if (nickname.length > 48) {
+            _uiState.value = _uiState.value.copy(error = "昵称不能超过48个字符")
+            return
+        }
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isSaving = true, error = null)
             val result = AuthRepository.updateProfile(displayName = nickname)
@@ -148,10 +160,12 @@ class ProfileEditViewModel(application: Application) : AndroidViewModel(applicat
                 if (user != null) {
                     prefs.saveUserLogin(user, AuthRepository.getAccessToken(), AuthRepository.getRefreshToken())
                 }
-                ProfileSyncRepository().saveDisplayNameToCloud(nickname)
+                val syncResult = ProfileSyncRepository().saveDisplayNameToCloud(nickname)
+                isUserEditingNickname = false
                 _uiState.value = _uiState.value.copy(
                     isSaving = false,
-                    saveSuccess = true
+                    saveSuccess = true,
+                    error = syncResult.exceptionOrNull()?.message
                 )
             } else {
                 _uiState.value = _uiState.value.copy(

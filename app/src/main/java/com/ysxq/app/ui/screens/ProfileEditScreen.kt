@@ -1,6 +1,7 @@
 package com.ysxq.app.ui.screens
 
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -22,6 +23,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -39,11 +41,29 @@ fun ProfileEditScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val user = uiState.user
+    val context = LocalContext.current
+
+    val nicknameError = when {
+        uiState.editNickname.isNotEmpty() && uiState.editNickname.length < 2 -> "昵称至少需要2个字符"
+        else -> null
+    }
 
     val avatarLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
-        uri?.let { viewModel.onAvatarPicked(it) }
+        uri?.let {
+            val fileSize = context.contentResolver.query(it, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val sizeIndex = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                    if (sizeIndex >= 0) cursor.getLong(sizeIndex) else 0L
+                } else 0L
+            } ?: 0L
+            if (fileSize > CloudBaseStorageHelper.MAX_RAW_FILE_SIZE) {
+                Toast.makeText(context, "图片文件过大，请选择小于20MB的图片", Toast.LENGTH_SHORT).show()
+                return@rememberLauncherForActivityResult
+            }
+            viewModel.onAvatarPicked(it)
+        }
     }
 
     LaunchedEffect(uiState.saveSuccess) {
@@ -201,11 +221,15 @@ fun ProfileEditScreen(
 
                 OutlinedTextField(
                     value = uiState.editNickname,
-                    onValueChange = { viewModel.onNicknameChange(it) },
+                    onValueChange = { if (it.length <= 48) viewModel.onNicknameChange(it) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     placeholder = {
                         Text("请输入昵称", color = TextTertiary)
+                    },
+                    isError = nicknameError != null,
+                    supportingText = nicknameError?.let {
+                        { Text(it, color = Color(0xFFFF5252), fontSize = 12.sp) }
                     },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = SakuraPrimary,

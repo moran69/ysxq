@@ -45,11 +45,19 @@ fun WatchHistoryScreen(
     val historySyncRepo = remember { WatchHistorySyncRepository(historyStore) }
     val history by historyStore.history.collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
+    var isLoading by remember { mutableStateOf(true) }
+    var syncError by remember { mutableStateOf(false) }
     var showClearDialog by remember { mutableStateOf(false) }
     var pendingDeleteEntry by remember { mutableStateOf<WatchHistoryEntry?>(null) }
 
     LaunchedEffect(Unit) {
-        historySyncRepo.pullFromCloud()
+        isLoading = true
+        syncError = false
+        val result = historySyncRepo.pullFromCloud()
+        isLoading = false
+        if (result.isFailure) {
+            syncError = true
+        }
     }
 
     if (showClearDialog) {
@@ -118,33 +126,75 @@ fun WatchHistoryScreen(
             colors = TopAppBarDefaults.topAppBarColors(containerColor = DarkBackground)
         )
 
-        if (history.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        Icons.Outlined.History,
-                        contentDescription = null,
-                        tint = TextTertiary,
-                        modifier = Modifier.size(64.dp)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text("暂无观看记录", color = TextTertiary, fontSize = 16.sp)
+        when {
+            isLoading -> {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = SakuraPrimary)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("正在同步...", color = TextTertiary, fontSize = 14.sp)
+                    }
                 }
             }
-        } else {
-            LazyColumn(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                items(history, key = { it.videoId }) { entry ->
-                    HistoryItemRow(
-                        entry = entry,
-                        onClick = { onVideoClick(entry.videoId) },
-                        onRemove = { pendingDeleteEntry = entry }
-                    )
+            syncError -> {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("同步失败", color = TextTertiary, fontSize = 16.sp)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("无法从云端获取观看历史", color = TextTertiary, fontSize = 13.sp)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    isLoading = true
+                                    syncError = false
+                                    val result = historySyncRepo.pullFromCloud()
+                                    isLoading = false
+                                    if (result.isFailure) {
+                                        syncError = true
+                                    }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = SakuraPrimary)
+                        ) { Text("重试", color = Color.White) }
+                    }
+                }
+            }
+            history.isEmpty() -> {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Outlined.History,
+                            contentDescription = null,
+                            tint = TextTertiary,
+                            modifier = Modifier.size(64.dp)
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("暂无观看记录", color = TextTertiary, fontSize = 16.sp)
+                    }
+                }
+            }
+            else -> {
+                LazyColumn(
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(history, key = { it.videoId }) { entry ->
+                        HistoryItemRow(
+                            entry = entry,
+                            onClick = { onVideoClick(entry.videoId) },
+                            onRemove = { pendingDeleteEntry = entry }
+                        )
+                    }
                 }
             }
         }

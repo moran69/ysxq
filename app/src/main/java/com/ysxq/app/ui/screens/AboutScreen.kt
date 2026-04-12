@@ -246,7 +246,7 @@ fun AboutScreen(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = "© 2024 EI Psy Cloud. All rights reserved.",
+                    text = "© ${java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)} EI Psy Cloud. All rights reserved.",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextTertiary,
                     textAlign = TextAlign.Center

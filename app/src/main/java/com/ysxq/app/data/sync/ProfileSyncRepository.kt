@@ -16,10 +16,12 @@ class ProfileSyncRepository {
         private const val MODEL_NAME = "user_profiles"
     }
 
-    suspend fun saveAvatarToCloud(avatarUrl: String) {
-        withContext(Dispatchers.IO) {
-            val token = AuthRepository.getAccessToken() ?: return@withContext
-            val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
+    suspend fun saveAvatarToCloud(avatarUrl: String): Result<Boolean> {
+        return withContext(Dispatchers.IO) {
+            val token = AuthRepository.getAccessToken()
+                ?: return@withContext Result.failure(IllegalStateException("未登录"))
+            val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() }
+                ?: return@withContext Result.failure(IllegalStateException("用户ID为空"))
             try {
                 val filter = buildStringEqFilter("uid" to uid)
                 val create = buildJsonObject {
@@ -37,17 +39,23 @@ class ProfileSyncRepository {
                 val errMsg = response.getErrorMessage()
                 if (errMsg != null) {
                     Log.e(TAG, "云端保存头像失败: $errMsg")
+                    Result.failure(RuntimeException("云端保存头像失败: $errMsg"))
+                } else {
+                    Result.success(true)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "云端保存头像失败: ${e.message}")
+                Result.failure(e)
             }
         }
     }
 
-    suspend fun saveDisplayNameToCloud(displayName: String) {
-        withContext(Dispatchers.IO) {
-            val token = AuthRepository.getAccessToken() ?: return@withContext
-            val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
+    suspend fun saveDisplayNameToCloud(displayName: String): Result<Boolean> {
+        return withContext(Dispatchers.IO) {
+            val token = AuthRepository.getAccessToken()
+                ?: return@withContext Result.failure(IllegalStateException("未登录"))
+            val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() }
+                ?: return@withContext Result.failure(IllegalStateException("用户ID为空"))
             try {
                 val filter = buildStringEqFilter("uid" to uid)
                 val create = buildJsonObject {
@@ -65,9 +73,13 @@ class ProfileSyncRepository {
                 val errMsg = response.getErrorMessage()
                 if (errMsg != null) {
                     Log.e(TAG, "云端保存昵称失败: $errMsg")
+                    Result.failure(RuntimeException("云端保存昵称失败: $errMsg"))
+                } else {
+                    Result.success(true)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "云端保存昵称失败: ${e.message}")
+                Result.failure(e)
             }
         }
     }

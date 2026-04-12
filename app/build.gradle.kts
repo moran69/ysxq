@@ -125,6 +125,9 @@ dependencies {
     // NanoHTTPD for DLNA proxy server
     implementation("org.nanohttpd:nanohttpd:2.3.1")
 
+    // ExifInterface for image orientation
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
+
     // Unit test dependencies
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")

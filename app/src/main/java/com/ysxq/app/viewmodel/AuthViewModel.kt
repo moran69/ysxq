@@ -11,6 +11,7 @@ import com.ysxq.app.data.auth.User
 import com.ysxq.app.data.local.userPreferences
 import com.ysxq.app.data.sync.ProfileSyncRepository
 import com.ysxq.app.data.storage.CloudBaseStorageHelper
+import androidx.lifecycle.SavedStateHandle
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,7 +34,7 @@ data class AuthUiState(
 
 enum class AuthMode { PHONE, EMAIL }
 
-class AuthViewModel(application: Application) : AndroidViewModel(application) {
+class AuthViewModel(application: Application, private val savedStateHandle: SavedStateHandle) : AndroidViewModel(application) {
 
     private val prefs by lazy { application.userPreferences() }
 
@@ -49,9 +50,29 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     private val _sendCodeState = MutableStateFlow<UiState<String>>(UiState.Idle)
     val sendCodeState: StateFlow<UiState<String>> = _sendCodeState.asStateFlow()
 
-    private var pendingVerificationId: String? = null
-    private var isExistingUser: Boolean = false
+    private var pendingVerificationId: String?
+        get() = savedStateHandle[KEY_PENDING_VERIFICATION_ID]
+        set(value) { savedStateHandle[KEY_PENDING_VERIFICATION_ID] = value }
+
+    private var isExistingUser: Boolean
+        get() = savedStateHandle[KEY_IS_EXISTING_USER] ?: false
+        set(value) { savedStateHandle[KEY_IS_EXISTING_USER] = value }
+
     private var countdownJob: Job? = null
+
+    private companion object {
+        const val KEY_PENDING_VERIFICATION_ID = "pending_verification_id"
+        const val KEY_IS_EXISTING_USER = "is_existing_user"
+        const val KEY_CODE_COUNTDOWN = "code_countdown"
+    }
+
+    init {
+        val savedCountdown = savedStateHandle.get<Int>(KEY_CODE_COUNTDOWN) ?: 0
+        if (savedCountdown > 0 && pendingVerificationId != null) {
+            _uiState.value = _uiState.value.copy(codeCountdown = savedCountdown)
+            startCountdown(savedCountdown)
+        }
+    }
 
     fun onEmailChange(email: String) {
         _uiState.value = _uiState.value.copy(email = email, emailError = null)
@@ -184,16 +205,19 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.value = AuthUiState(authMode = _uiState.value.authMode)
         pendingVerificationId = null
         isExistingUser = false
+        savedStateHandle[KEY_CODE_COUNTDOWN] = 0
     }
 
-    private fun startCountdown() {
+    private fun startCountdown(fromSeconds: Int = 60) {
         countdownJob?.cancel()
         countdownJob = viewModelScope.launch {
-            for (i in 60 downTo 1) {
+            for (i in fromSeconds downTo 1) {
                 _uiState.value = _uiState.value.copy(codeCountdown = i)
+                savedStateHandle[KEY_CODE_COUNTDOWN] = i
                 delay(1000)
             }
             _uiState.value = _uiState.value.copy(codeCountdown = 0)
+            savedStateHandle[KEY_CODE_COUNTDOWN] = 0
         }
     }
 

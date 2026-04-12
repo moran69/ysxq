@@ -2,10 +2,12 @@ package com.ysxq.app.ui.screens
 
 import android.app.Activity
 import android.content.BroadcastReceiver
+import android.content.ComponentCallbacks
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.os.Build
 import android.provider.Settings
 import android.view.KeyEvent
@@ -53,6 +55,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -137,6 +140,7 @@ fun DetailScreen(
     var isLongPressSpeed by remember { mutableStateOf(false) }
     var speedBeforeLongPress by remember { mutableFloatStateOf(1f) }
     var showLoginDialog by remember { mutableStateOf(false) }
+    var deviceOrientation by remember { mutableIntStateOf(context.resources.configuration.orientation) }
 
     val favoritesStore = remember { context.favoritesStore() }
     val watchHistoryStore = remember { context.watchHistoryStore() }
@@ -314,6 +318,42 @@ fun DetailScreen(
             delay(15_000)
             if (exoPlayer.isPlaying || exoPlayer.contentDuration > 0) {
                 saveWatchProgress()
+            }
+        }
+    }
+
+    DisposableEffect(context) {
+        val callback = object : ComponentCallbacks {
+            override fun onConfigurationChanged(newConfig: Configuration) {
+                deviceOrientation = newConfig.orientation
+            }
+            override fun onLowMemory() {}
+        }
+        context.registerComponentCallbacks(callback)
+        onDispose { context.unregisterComponentCallbacks(callback) }
+    }
+
+    LaunchedEffect(hasMediaLoaded, isCasting) {
+        if (hasMediaLoaded && !isCasting) {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
+        }
+    }
+
+    LaunchedEffect(deviceOrientation) {
+        if (isCasting || !hasMediaLoaded) return@LaunchedEffect
+        if (deviceOrientation == Configuration.ORIENTATION_LANDSCAPE && !isFullscreen) {
+            isFullscreen = true
+            activity?.let { act ->
+                val controller = WindowCompat.getInsetsController(act.window, act.window.decorView)
+                controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                controller.hide(WindowInsetsCompat.Type.systemBars())
+            }
+        } else if (deviceOrientation == Configuration.ORIENTATION_PORTRAIT && isFullscreen) {
+            isFullscreen = false
+            isLocked = false
+            activity?.let { act ->
+                WindowCompat.getInsetsController(act.window, act.window.decorView)
+                    .show(WindowInsetsCompat.Type.systemBars())
             }
         }
     }
@@ -1100,16 +1140,27 @@ private fun FullscreenPlayer(
                 }
                 .pointerInput(Unit) {
                     awaitEachGesture {
-                        awaitFirstDown(requireUnconsumed = false)
-                        val upBeforeTimeout = withTimeoutOrNull(500L) {
+                        val firstDown = awaitFirstDown(requireUnconsumed = false)
+                        val firstUp = withTimeoutOrNull(300L) {
                             waitForUpOrCancellation()
                         }
-                        if (upBeforeTimeout == null) {
+                        if (firstUp == null) {
                             onLongPressSpeedChanged(true)
                             waitForUpOrCancellation()
                             onLongPressSpeedChanged(false)
                         } else {
-                            onToggleControls()
+                            val secondDown = withTimeoutOrNull(300L) {
+                                awaitPointerEvent(PointerEventPass.Main)
+                                currentEvent.changes.firstOrNull()?.let {
+                                    if (it.pressed) it else null
+                                }
+                            }
+                            if (secondDown != null) {
+                                waitForUpOrCancellation()
+                                onTogglePlayPause()
+                            } else {
+                                onToggleControls()
+                            }
                         }
                     }
                 }
@@ -1559,16 +1610,27 @@ private fun InlinePlayerGestureOverlay(
                 }
                 .pointerInput(Unit) {
                     awaitEachGesture {
-                        awaitFirstDown(requireUnconsumed = false)
-                        val upBeforeTimeout = withTimeoutOrNull(500L) {
+                        val firstDown = awaitFirstDown(requireUnconsumed = false)
+                        val firstUp = withTimeoutOrNull(300L) {
                             waitForUpOrCancellation()
                         }
-                        if (upBeforeTimeout == null) {
+                        if (firstUp == null) {
                             onLongPressSpeedChanged(true)
                             waitForUpOrCancellation()
                             onLongPressSpeedChanged(false)
                         } else {
-                            onToggleControls()
+                            val secondDown = withTimeoutOrNull(300L) {
+                                awaitPointerEvent(PointerEventPass.Main)
+                                currentEvent.changes.firstOrNull()?.let {
+                                    if (it.pressed) it else null
+                                }
+                            }
+                            if (secondDown != null) {
+                                waitForUpOrCancellation()
+                                if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+                            } else {
+                                onToggleControls()
+                            }
                         }
                     }
                 }
@@ -1749,6 +1811,7 @@ private fun CastDeviceSheet(
     var pendingSwitchDirection by remember { mutableStateOf<Int?>(null) }
 
     var isStopInProgress by remember { mutableStateOf(false) }
+    var showDisconnectDialog by remember { mutableStateOf(false) }
 
     val stopCasting: () -> Unit = lambda@{
         if (isStopInProgress) return@lambda
@@ -2119,6 +2182,8 @@ private fun CastDeviceSheet(
                                                                 stoppedCount++
                                                                 if (stoppedCount >= 2 && currentEpisodeIndex < totalEpisodes - 1) {
                                                                     shouldAutoNext = true
+                                                                } else if (stoppedCount >= 3) {
+                                                                    showDisconnectDialog = true
                                                                 }
                                                             } else {
                                                                 stoppedCount = 0
@@ -2130,7 +2195,11 @@ private fun CastDeviceSheet(
                                                                 if (!switched) break
                                                                 stoppedCount = 0
                                                             }
-                                                        } catch (_: Exception) { }
+                                                        } catch (_: Exception) {
+                                                            if (!userStopped && isCasting) {
+                                                                showDisconnectDialog = true
+                                                            }
+                                                        }
                                                     }
                                                 } else {
                                                     // Cast failed, clean up
@@ -2225,6 +2294,66 @@ private fun CastDeviceSheet(
                 }
             }
         }
+    }
+
+    if (showDisconnectDialog) {
+        AlertDialog(
+            onDismissRequest = { showDisconnectDialog = false },
+            containerColor = DarkSurface,
+            title = { Text("投屏已断开", color = TextPrimary, fontWeight = FontWeight.Bold) },
+            text = { Text("与设备的连接已断开，请检查网络后重试", color = TextSecondary) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDisconnectDialog = false
+                    val dev = currentCastDevice
+                    if (dev != null && !isCasting) {
+                        castingDevice = dev.id
+                        castingDeviceName = dev.name
+                        isConnecting = true
+                        castError = null
+                        userStopped = false
+                        scope.launch {
+                            try {
+                                DlnaProxyService.start(context)
+                                delay(100)
+                                val sm = DlnaProxyService.sessionManager
+                                    ?: throw IllegalStateException("代理服务未就绪")
+                                val url = getEpisodeUrl()
+                                if (url == null) throw IllegalStateException("无法获取播放地址")
+                                val ps = withContext(Dispatchers.IO) {
+                                    sm.createSession(url, 0L)
+                                }
+                                val srv = proxyServer ?: DlnaProxyServer().also {
+                                    it.start()
+                                    proxyServer = it
+                                }
+                                val pUrl = srv.getStreamUrl(ps.sessionId)
+                                val ok = DLNACast.castToDevice(dev, pUrl, videoTitle)
+                                if (ok) {
+                                    isCasting = true
+                                    connectedSessionId = ps.sessionId
+                                    isConnecting = false
+                                    onCastStateChanged(true)
+                                } else {
+                                    throw IllegalStateException("投屏连接失败")
+                                }
+                            } catch (e: Exception) {
+                                castError = e.message ?: "重连失败"
+                                isConnecting = false
+                                castingDevice = null
+                                castingDeviceName = null
+                            }
+                        }
+                    }
+                }) { Text("重新连接", color = SakuraPrimary) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showDisconnectDialog = false
+                    stopCasting()
+                }) { Text("停止投屏", color = TextSecondary) }
+            }
+        )
     }
 }
 

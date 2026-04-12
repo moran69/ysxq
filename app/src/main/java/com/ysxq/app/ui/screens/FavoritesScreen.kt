@@ -44,11 +44,19 @@ fun FavoritesScreen(
     val favorites by favoritesStore.favorites.collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
 
+    var isLoading by remember { mutableStateOf(true) }
+    var syncError by remember { mutableStateOf(false) }
     var itemToDelete by remember { mutableStateOf<FavoriteItem?>(null) }
     var showClearDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        favoritesSyncRepo.pullFromCloud()
+        isLoading = true
+        syncError = false
+        val result = favoritesSyncRepo.pullFromCloud()
+        isLoading = false
+        if (result.isFailure) {
+            syncError = true
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize().background(DarkBackground)) {
@@ -69,35 +77,77 @@ fun FavoritesScreen(
             colors = TopAppBarDefaults.topAppBarColors(containerColor = DarkBackground)
         )
 
-        if (favorites.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        Icons.Outlined.FavoriteBorder,
-                        contentDescription = null,
-                        tint = TextTertiary,
-                        modifier = Modifier.size(64.dp)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text("暂无收藏", color = TextTertiary, fontSize = 16.sp)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("在影片详情页点击收藏即可添加", color = TextTertiary, fontSize = 13.sp)
+        when {
+            isLoading -> {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = SakuraPrimary)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("正在同步...", color = TextTertiary, fontSize = 14.sp)
+                    }
                 }
             }
-        } else {
-            LazyColumn(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                items(favorites, key = { it.id }) { item ->
-                    FavoriteItemRow(
-                        item = item,
-                        onVideoClick = { onVideoClick(item.id) },
-                        onDeleteClick = { itemToDelete = item }
-                    )
+            syncError -> {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("同步失败", color = TextTertiary, fontSize = 16.sp)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("无法从云端获取收藏数据", color = TextTertiary, fontSize = 13.sp)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    isLoading = true
+                                    syncError = false
+                                    val result = favoritesSyncRepo.pullFromCloud()
+                                    isLoading = false
+                                    if (result.isFailure) {
+                                        syncError = true
+                                    }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = SakuraPrimary)
+                        ) { Text("重试", color = Color.White) }
+                    }
+                }
+            }
+            favorites.isEmpty() -> {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Outlined.FavoriteBorder,
+                            contentDescription = null,
+                            tint = TextTertiary,
+                            modifier = Modifier.size(64.dp)
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("暂无收藏", color = TextTertiary, fontSize = 16.sp)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("在影片详情页点击收藏即可添加", color = TextTertiary, fontSize = 13.sp)
+                    }
+                }
+            }
+            else -> {
+                LazyColumn(
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(favorites, key = { it.id }) { item ->
+                        FavoriteItemRow(
+                            item = item,
+                            onVideoClick = { onVideoClick(item.id) },
+                            onDeleteClick = { itemToDelete = item }
+                        )
+                    }
                 }
             }
         }

@@ -48,7 +48,7 @@ fun ProfileScreen(
 
     val photoUrl = (authState as? AuthState.Authenticated)?.user?.photoUrl
     val persistedResolvedUrl by viewModel.resolvedAvatarUrl.collectAsState()
-    var resolvedPhotoUrl by remember(photoUrl) { mutableStateOf<String?>(null) }
+    var resolvedPhotoUrl by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(photoUrl) {
         val resolved = CloudBaseStorageHelper.resolveAvatarUrl(photoUrl)
         if (resolved != null) {
@@ -221,14 +221,20 @@ private fun AuthenticatedContent(
                         model = avatarUri,
                         contentDescription = "头像",
                         modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
+                        contentScale = ContentScale.Crop,
+                        placeholder = null,
+                        error = null,
+                        fallback = null
                     )
                 } else if (!displayAvatarUrl.isNullOrBlank()) {
                     AsyncImage(
                         model = displayAvatarUrl,
                         contentDescription = "头像",
                         modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
+                        contentScale = ContentScale.Crop,
+                        placeholder = null,
+                        error = null,
+                        fallback = null
                     )
                 } else {
                     Box(

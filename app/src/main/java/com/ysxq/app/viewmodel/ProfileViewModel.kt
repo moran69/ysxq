@@ -121,6 +121,14 @@ class ProfileViewModel(application: Application) : AndroidViewModel(application)
             _uiState.value = _uiState.value.copy(updateError = "昵称不能为空")
             return
         }
+        if (nickname.length < 2) {
+            _uiState.value = _uiState.value.copy(updateError = "昵称至少需要2个字符")
+            return
+        }
+        if (nickname.length > 48) {
+            _uiState.value = _uiState.value.copy(updateError = "昵称不能超过48个字符")
+            return
+        }
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isUpdating = true, updateError = null)
             AuthRepository.updateProfile(displayName = nickname)

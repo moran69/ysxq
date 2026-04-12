@@ -3,9 +3,12 @@ package com.ysxq.app.data.storage
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.util.Base64
 import android.util.Log
+import androidx.exifinterface.media.ExifInterface
 import com.ysxq.app.data.NetworkModule
 import com.ysxq.app.data.auth.AuthRepository
 import kotlinx.coroutines.Dispatchers
@@ -46,6 +49,8 @@ class CloudBaseStorageHelper(private val context: Context) {
         private const val MAX_AVATAR_DIMENSION = 800
         private const val JPEG_QUALITY = 80
         private const val MAX_FILE_SIZE = 5 * 1024 * 1024
+        const val MAX_RAW_FILE_SIZE = 20L * 1024 * 1024
+        private const val MAX_IMAGE_DIMENSION = 4096
 
         private const val URL_CACHE_DURATION_MS = 24 * 60 * 60 * 1000L
 
@@ -91,7 +96,7 @@ class CloudBaseStorageHelper(private val context: Context) {
                 ?: return@withContext Result.failure(Exception("未登录"))
 
             val compressed = compressImage(fileUri)
-                ?: return@withContext Result.failure(Exception("图片处理失败"))
+                .getOrElse { return@withContext Result.failure(it) }
 
             if (compressed.size > MAX_FILE_SIZE) {
                 return@withContext Result.failure(
@@ -190,37 +195,76 @@ class CloudBaseStorageHelper(private val context: Context) {
         }
     }
 
-    private fun compressImage(uri: Uri): ByteArray? {
+    private fun compressImage(uri: Uri): Result<ByteArray> {
         return try {
-            val inputStream = context.contentResolver.openInputStream(uri) ?: return null
-            val bitmap = BitmapFactory.decodeStream(inputStream) ?: return null
+            val fileSize = context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (sizeIndex >= 0) cursor.getLong(sizeIndex) else -1L
+                } else -1L
+            } ?: -1L
+
+            if (fileSize > MAX_RAW_FILE_SIZE) {
+                return Result.failure(Exception("图片文件过大，请选择小于20MB的图片"))
+            }
+
+            val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            context.contentResolver.openInputStream(uri)?.use {
+                BitmapFactory.decodeStream(it, null, boundsOptions)
+            }
+            if (boundsOptions.outWidth > MAX_IMAGE_DIMENSION || boundsOptions.outHeight > MAX_IMAGE_DIMENSION) {
+                return Result.failure(Exception("图片尺寸过大，请选择小于${MAX_IMAGE_DIMENSION}x${MAX_IMAGE_DIMENSION}的图片"))
+            }
+
+            val inputStream = context.contentResolver.openInputStream(uri)
+                ?: return Result.failure(Exception("无法读取图片"))
+            val bitmap = BitmapFactory.decodeStream(inputStream)
+                ?: return Result.failure(Exception("图片解码失败"))
             inputStream.close()
 
+            val orientation = context.contentResolver.openInputStream(uri)?.use { exifStream ->
+                val exif = ExifInterface(exifStream)
+                exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+            } ?: ExifInterface.ORIENTATION_NORMAL
+
+            val rotatedBitmap = when (orientation) {
+                ExifInterface.ORIENTATION_ROTATE_90 -> rotateBitmap(bitmap, 90f).also { bitmap.recycle() }
+                ExifInterface.ORIENTATION_ROTATE_180 -> rotateBitmap(bitmap, 180f).also { bitmap.recycle() }
+                ExifInterface.ORIENTATION_ROTATE_270 -> rotateBitmap(bitmap, 270f).also { bitmap.recycle() }
+                else -> bitmap
+            }
+
             val ratio = minOf(
-                MAX_AVATAR_DIMENSION.toFloat() / bitmap.width,
-                MAX_AVATAR_DIMENSION.toFloat() / bitmap.height,
+                MAX_AVATAR_DIMENSION.toFloat() / rotatedBitmap.width,
+                MAX_AVATAR_DIMENSION.toFloat() / rotatedBitmap.height,
                 1f
             )
             val scaled = if (ratio < 1f) {
                 Bitmap.createScaledBitmap(
-                    bitmap,
-                    (bitmap.width * ratio).toInt(),
-                    (bitmap.height * ratio).toInt(),
+                    rotatedBitmap,
+                    (rotatedBitmap.width * ratio).toInt(),
+                    (rotatedBitmap.height * ratio).toInt(),
                     true
-                ).also { bitmap.recycle() }
+                ).also { rotatedBitmap.recycle() }
             } else {
-                bitmap
+                rotatedBitmap
             }
 
             val outputStream = ByteArrayOutputStream()
             scaled.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, outputStream)
             scaled.recycle()
 
-            outputStream.toByteArray()
+            Result.success(outputStream.toByteArray())
         } catch (e: Exception) {
             Log.e(TAG, "图片压缩失败", e)
-            null
+            Result.failure(e)
         }
+    }
+
+    private fun rotateBitmap(bitmap: Bitmap, degrees: Float): Bitmap {
+        val matrix = Matrix()
+        matrix.postRotate(degrees)
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     }
 
     @Serializable
