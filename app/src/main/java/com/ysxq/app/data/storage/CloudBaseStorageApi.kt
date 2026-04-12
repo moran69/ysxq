@@ -8,9 +8,14 @@ interface CloudBaseStorageApi {
     @POST("v1/storages/get-objects-download-info")
     suspend fun getDownloadUrls(
         @Header("Authorization") authorization: String,
-        @Body fileIds: List<String>
+        @Body request: List<DownloadRequestItem>
     ): List<DownloadInfoItem>
 }
+
+@Serializable
+data class DownloadRequestItem(
+    val cloudObjectId: String
+)
 
 @Serializable
 data class DownloadInfoItem(

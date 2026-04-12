@@ -68,7 +68,7 @@ class CloudBaseStorageHelper(private val context: Context) {
             val token = AuthRepository.getAccessToken() ?: return null
             return try {
                 val items = NetworkModule.cloudBaseStorageService.getDownloadUrls(
-                    "Bearer $token", listOf(photoUrl)
+                    "Bearer $token", listOf(DownloadRequestItem(cloudObjectId = photoUrl))
                 )
                 val url = items.firstOrNull()?.downloadUrl
                 if (url != null) {
