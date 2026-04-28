@@ -43,17 +43,22 @@ class CategoryViewModel : ViewModel() {
         loadCategoriesAndFilters()
     }
 
-    /** 从首页/外部跳转时设置初始分类 */
+    /** 从首页/外部跳转时设置初始分类（自动解析子分类到父级主分类） */
     fun setInitialCategory(categoryId: Int) {
         if (categoryId <= 0) return
         val s = _state.value
-        if (s.selectedMainCategoryId == categoryId) return
+
+        // 解析：如果传的是子分类 ID，找到其父级主分类
+        val allCats = s.allCategories.ifEmpty { cache.categories }
+        val target = allCats.find { it.id == categoryId }
+        val mainCatId = if (target != null && target.pid != 0) target.pid else categoryId
+
+        if (s.selectedMainCategoryId == mainCatId) return
         if (s.mainCategories.isEmpty()) {
-            // 分类还没加载完，先记录，等加载完后自动选择
-            _state.value = s.copy(selectedMainCategoryId = categoryId)
+            _state.value = s.copy(selectedMainCategoryId = mainCatId)
             return
         }
-        selectMainCategory(categoryId)
+        selectMainCategory(mainCatId)
     }
 
     private fun loadCategoriesAndFilters() {
@@ -136,6 +141,7 @@ class CategoryViewModel : ViewModel() {
                     if (state.areaOptions.size <= 1 && state.yearOptions.size <= 1) {
                         loadFilterOptionsSync(defaultMainId)
                     }
+                    saveViewState()
                 }
             }
             return
@@ -146,7 +152,7 @@ class CategoryViewModel : ViewModel() {
             try {
                 val resp = api.getVideoList(ac = "list")
                 val allCategories = resp.`class`
-                cache.saveCategories(allCategories)
+                if (allCategories.isNotEmpty()) cache.saveCategories(allCategories)
 
                 val mainCategories = allCategories.filter { it.pid == 0 }
                 val initialId = _state.value.selectedMainCategoryId
@@ -353,7 +359,7 @@ class CategoryViewModel : ViewModel() {
         val job = viewModelScope.launch {
             val s = _state.value
             val typeId = if (s.selectedGenreId > 0) s.selectedGenreId
-                else s.subCategories.firstOrNull()?.id
+                else s.subCategories.firstOrNull()?.id ?: s.selectedMainCategoryId
 
             val key = cache.videoListKey("detail", typeId, page, s.selectedArea, s.selectedYear, null)
 
@@ -389,6 +395,7 @@ class CategoryViewModel : ViewModel() {
                 val newVideos = if (isLoadMore) _state.value.videos + resp.list else resp.list
 
                 cache.saveVideoList(key, AppCache.CachedResponse(newVideos, resp.pagecount, resp.total))
+                cache.addToSearchIndex(resp.list)
 
                 _state.value = _state.value.copy(
                     isLoading = false,

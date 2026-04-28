@@ -30,14 +30,15 @@ android {
         applicationId = "com.ysxq.app"
         minSdk = 24
         targetSdk = 36
-versionCode = 6
-    versionName = "1.3.1"
+        versionCode = 27
+        versionName = "1.4.10"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         debug {
+            applicationIdSuffix = ".debug"
         }
         release {
             isMinifyEnabled = true
@@ -107,6 +108,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.5.1")
     implementation("androidx.media3:media3-ui:1.5.1")
+    implementation("androidx.media3:media3-datasource-okhttp:1.5.1")
 
     // DataStore for preferences
     implementation("androidx.datastore:datastore-preferences:1.1.1")

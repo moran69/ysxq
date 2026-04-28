@@ -10,7 +10,7 @@ import com.ysxq.app.data.auth.User
 import com.ysxq.app.data.local.userPreferences
 import com.ysxq.app.data.storage.AvatarUploadResult
 import com.ysxq.app.data.storage.CloudBaseStorageHelper
-import com.ysxq.app.data.sync.ProfileSyncRepository
+
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -112,13 +112,11 @@ class ProfileEditViewModel(application: Application) : AndroidViewModel(applicat
                     }
                     CloudBaseStorageHelper.cacheResolvedUrl(uploadResult.fileId, uploadResult.downloadUrl)
                     prefs.saveResolvedAvatarUrl(uploadResult.downloadUrl)
-                    val syncResult = ProfileSyncRepository().saveAvatarToCloud(uploadResult.fileId)
                     avatarUploadInProgress = false
                     _uiState.value = _uiState.value.copy(
                         cloudAvatarUrl = uploadResult.downloadUrl,
                         isUploadingAvatar = false,
-                        localAvatarUri = null,
-                        error = syncResult.exceptionOrNull()?.message
+                        localAvatarUri = null
                     )
                     prefs.clearLocalAvatarUri()
                 } else {
@@ -160,12 +158,10 @@ class ProfileEditViewModel(application: Application) : AndroidViewModel(applicat
                 if (user != null) {
                     prefs.saveUserLogin(user, AuthRepository.getAccessToken(), AuthRepository.getRefreshToken())
                 }
-                val syncResult = ProfileSyncRepository().saveDisplayNameToCloud(nickname)
                 isUserEditingNickname = false
                 _uiState.value = _uiState.value.copy(
                     isSaving = false,
-                    saveSuccess = true,
-                    error = syncResult.exceptionOrNull()?.message
+                    saveSuccess = true
                 )
             } else {
                 _uiState.value = _uiState.value.copy(

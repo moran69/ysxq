@@ -63,26 +63,22 @@ object NetworkModule {
     }
 
     private val tokenAuthenticator = object : Authenticator {
-        private val lock = Object()
-
         override fun authenticate(route: Route?, response: Response): Request? {
             if (response.priorResponse != null) return null
-            synchronized(lock) {
-                val currentToken = AuthRepository.getAccessToken()
-                val failedToken = response.request.header("Authorization")
-                    ?.removePrefix("Bearer ")
-                if (currentToken != null && currentToken != failedToken) {
-                    return response.request.newBuilder()
-                        .header("Authorization", "Bearer $currentToken")
-                        .build()
-                }
-                val newToken = kotlinx.coroutines.runBlocking {
-                    AuthRepository.refreshAccessToken()
-                } ?: return null
+            val currentToken = AuthRepository.getAccessToken()
+            val failedToken = response.request.header("Authorization")
+                ?.removePrefix("Bearer ")
+            if (currentToken != null && currentToken != failedToken) {
                 return response.request.newBuilder()
-                    .header("Authorization", "Bearer $newToken")
+                    .header("Authorization", "Bearer $currentToken")
                     .build()
             }
+            val newToken = kotlinx.coroutines.runBlocking {
+                AuthRepository.refreshAccessToken()
+            } ?: return null
+            return response.request.newBuilder()
+                .header("Authorization", "Bearer $newToken")
+                .build()
         }
     }
 

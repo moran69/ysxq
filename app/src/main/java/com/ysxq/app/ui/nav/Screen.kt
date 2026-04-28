@@ -14,6 +14,10 @@ sealed class Screen(val route: String) {
     data object Auth : Screen("auth")
     data object Favorites : Screen("favorites")
     data object WatchHistory : Screen("watch_history")
+    data object Download : Screen("download")
+    data object LocalPlayer : Screen("local_player/{videoId}?episodeIndex={episodeIndex}") {
+        fun createRoute(videoId: Int, episodeIndex: Int = 0) = "local_player/$videoId?episodeIndex=$episodeIndex"
+    }
     data object ProfileEdit : Screen("profile_edit")
     data object Feedback : Screen("feedback")
     data object About : Screen("about")

@@ -22,18 +22,33 @@ class FavoritesSyncRepository(
     companion object {
         private const val TAG = "FavoritesSync"
         private const val MODEL_NAME = "favorites"
+        private val AUTH_ERROR_KEYWORDS = listOf("unauthenticated", "unauthorized", "token", "invalid_token", "access_denied", "login", "id_token_expired", "permission", "auth failure")
+    }
+
+    private fun isAuthError(errorMsg: String?): Boolean {
+        if (errorMsg.isNullOrBlank()) return false
+        val lower = errorMsg.lowercase()
+        return AUTH_ERROR_KEYWORDS.any { lower.contains(it) }
+    }
+
+    private suspend fun refreshAndGetToken(): String? {
+        return AuthRepository.getValidAccessToken()
     }
 
     suspend fun upsertToCloud(item: FavoriteItem) {
+        syncMutex.withLock {
+            upsertToCloudInternal(item)
+        }
+    }
+
+    private suspend fun upsertToCloudInternal(item: FavoriteItem) {
         withContext(Dispatchers.IO) {
-            val token = AuthRepository.getAccessToken() ?: return@withContext
+            var token = AuthRepository.getValidAccessToken() ?: return@withContext
             val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
             try {
-                // Step 1: Query for existing record by uid + videoId
                 val existingRecord = findExistingRecord(token, uid, item.id)
 
                 if (existingRecord != null) {
-                    // Step 2a: Update existing record using _id filter
                     val recordId = existingRecord["_id"]?.jsonPrimitive?.contentOrNull
                     if (recordId != null) {
                         val updateData = buildJsonObject {
@@ -45,7 +60,7 @@ class FavoritesSyncRepository(
                             put("area", item.area)
                             put("addedAt", item.addedAt)
                         }
-                        val response = api.updateByFilter(
+                        var response = api.updateByFilter(
                             "Bearer $token",
                             MODEL_NAME,
                             CloudBaseDbUpdateByFilterRequest(
@@ -55,13 +70,26 @@ class FavoritesSyncRepository(
                                 data = updateData
                             )
                         )
-                        val errMsg = response.getErrorMessage()
+                        var errMsg = response.getErrorMessage()
+                        if (isAuthError(errMsg)) {
+                            token = refreshAndGetToken() ?: return@withContext
+                            response = api.updateByFilter(
+                                "Bearer $token",
+                                MODEL_NAME,
+                                CloudBaseDbUpdateByFilterRequest(
+                                    filter = CloudBaseDbFilter(
+                                        where = mapOf("_id" to buildJsonObject { put("\$eq", recordId) })
+                                    ),
+                                    data = updateData
+                                )
+                            )
+                            errMsg = response.getErrorMessage()
+                        }
                         if (errMsg != null) {
                             Log.e(TAG, "云端更新收藏失败: $errMsg")
                         }
                     }
                 } else {
-                    // Step 2b: Create new record — CloudBase create API requires data wrapped in "data" field
                     val fields = buildJsonObject {
                         put("uid", uid)
                         put("id", item.id)
@@ -74,8 +102,13 @@ class FavoritesSyncRepository(
                         put("addedAt", item.addedAt)
                     }
                     val createBody = buildJsonObject { put("data", fields) }
-                    val response = api.create("Bearer $token", MODEL_NAME, createBody)
-                    val errMsg = response.getErrorMessage()
+                    var response = api.create("Bearer $token", MODEL_NAME, createBody)
+                    var errMsg = response.getErrorMessage()
+                    if (isAuthError(errMsg)) {
+                        token = refreshAndGetToken() ?: return@withContext
+                        response = api.create("Bearer $token", MODEL_NAME, createBody)
+                        errMsg = response.getErrorMessage()
+                    }
                     if (errMsg != null) {
                         Log.e(TAG, "云端同步收藏失败: $errMsg")
                     }
@@ -114,7 +147,7 @@ class FavoritesSyncRepository(
     suspend fun deleteFromCloud(videoId: Int) {
         syncMutex.withLock {
             withContext(Dispatchers.IO) {
-                val token = AuthRepository.getAccessToken() ?: return@withContext
+                val token = AuthRepository.getValidAccessToken() ?: return@withContext
                 val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
                 try {
                     val filter = CloudBaseDbDeleteByFilterRequest(
@@ -140,7 +173,7 @@ class FavoritesSyncRepository(
     suspend fun clearCloud() {
         syncMutex.withLock {
             withContext(Dispatchers.IO) {
-                val token = AuthRepository.getAccessToken() ?: return@withContext
+                val token = AuthRepository.getValidAccessToken() ?: return@withContext
                 val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
                 try {
                     val filter = CloudBaseDbDeleteByFilterRequest(
@@ -163,7 +196,7 @@ class FavoritesSyncRepository(
     suspend fun pullFromCloud(): Result<Boolean> {
         return syncMutex.withLock {
             withContext(Dispatchers.IO) {
-                val token = AuthRepository.getAccessToken()
+                var token = AuthRepository.getValidAccessToken()
                 if (token == null) {
                     return@withContext Result.success(false)
                 }
@@ -172,7 +205,7 @@ class FavoritesSyncRepository(
                     return@withContext Result.success(false)
                 }
                 try {
-                    val response = api.list(
+                    var response = api.list(
                         "Bearer $token",
                         MODEL_NAME,
                         CloudBaseDbListRequest(
@@ -185,7 +218,24 @@ class FavoritesSyncRepository(
                             getCount = false
                         )
                     )
-                    val listErr = response.getErrorMessage()
+                    var listErr = response.getErrorMessage()
+                    if (isAuthError(listErr)) {
+                        token = refreshAndGetToken() ?: return@withContext Result.failure(Exception("登录已过期，请重新登录"))
+                        response = api.list(
+                            "Bearer $token",
+                            MODEL_NAME,
+                            CloudBaseDbListRequest(
+                                filter = CloudBaseDbFilter(
+                                    where = mapOf("uid" to buildJsonObject { put("\$eq", uid) })
+                                ),
+                                orderBy = listOf(buildJsonObject { put("addedAt", "desc") }),
+                                pageSize = 200,
+                                pageNumber = 1,
+                                getCount = false
+                            )
+                        )
+                        listErr = response.getErrorMessage()
+                    }
                     if (listErr != null) {
                         Log.e(TAG, "从云端拉取收藏失败: $listErr")
                         return@withContext Result.failure(Exception(listErr))
@@ -219,7 +269,7 @@ class FavoritesSyncRepository(
                     }
 
                     for (localItem in localOnly) {
-                        upsertToCloud(localItem)
+                        upsertToCloudInternal(localItem)
                     }
                     Result.success(true)
                 } catch (e: Exception) {

@@ -34,6 +34,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -62,6 +63,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -80,7 +82,9 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
+import okhttp3.OkHttpClient
+import java.util.concurrent.TimeUnit
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -94,11 +98,13 @@ import com.ysxq.app.data.local.toFavoriteItem
 import com.ysxq.app.data.local.watchHistoryStore
 import com.ysxq.app.data.sync.FavoritesSyncRepository
 import com.ysxq.app.data.sync.WatchHistorySyncRepository
+import com.ysxq.app.data.proxy.DirectDlnaCaster
 import com.ysxq.app.data.proxy.DlnaProxyServer
 import com.ysxq.app.data.proxy.DlnaProxyService
 import com.ysxq.app.ui.components.*
 import com.ysxq.app.ui.theme.*
 import com.ysxq.app.data.auth.AuthRepository
+
 import com.ysxq.app.viewmodel.DetailViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -113,6 +119,7 @@ private suspend fun searchDlnaDevices(context: Context): List<DLNACast.Device> {
     val multicastLock = wifiManager.createMulticastLock("dlna-discovery")
     multicastLock.acquire()
     return try {
+        DLNACast.init(context.applicationContext)
         DLNACast.search(timeout = 5000)
     } finally {
         multicastLock.release()
@@ -138,6 +145,10 @@ fun DetailScreen(
     var isLocked by remember { mutableStateOf(false) }
     var showSpeedDialog by remember { mutableStateOf(false) }
     var showCastSheet by remember { mutableStateOf(false) }
+    var showDownloadDialog by remember { mutableStateOf(false) }
+    var selectedDownloadEpisodes by remember { mutableStateOf<Set<Int>>(emptySet()) }
+
+
     var showFullscreenEpisodes by remember { mutableStateOf(false) }
     var playerError by remember { mutableStateOf<String?>(null) }
     var hasMediaLoaded by remember { mutableStateOf(false) }
@@ -157,7 +168,10 @@ fun DetailScreen(
     var castProgress by remember { mutableStateOf("00:00 / 00:00") }
     var castPlaybackState by remember { mutableStateOf("") }
     var showDisconnectDialog by remember { mutableStateOf(false) }
+    var castDisconnectReason by remember { mutableStateOf("") }
+    var showStopCastConfirm by remember { mutableStateOf(false) }
     var castCommandHandler by remember { mutableStateOf<((Int) -> Unit)?>(null) }
+    var pendingCastEpisodeIndex by remember { mutableStateOf<Int?>(null) }
 
     val favoritesStore = remember { context.favoritesStore() }
     val watchHistoryStore = remember { context.watchHistoryStore() }
@@ -178,13 +192,17 @@ fun DetailScreen(
     val scope = rememberCoroutineScope()
 
     val exoPlayer = remember {
-        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+        val streamClient = OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .build()
+
+        val httpDataSourceFactory = OkHttpDataSource.Factory(streamClient)
             .setUserAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
             .setDefaultRequestProperties(mapOf(
                 "Referer" to "https://cj.lziapi.com/"
             ))
-            .setConnectTimeoutMs(15_000)
-            .setReadTimeoutMs(15_000)
 
         val dataSourceFactory = DefaultDataSource.Factory(context, httpDataSourceFactory)
 
@@ -193,8 +211,8 @@ fun DetailScreen(
             .setBufferDurationsMs(
                 100_000,   // minBufferMs: keep 100s buffered
                 100_000,   // maxBufferMs: allow up to 100s
-                5000,      // bufferForPlaybackMs: wait 5s before starting
-                10_000     // bufferForPlaybackAfterRebufferMs: wait 10s after rebuffer
+                8000,      // bufferForPlaybackMs: wait 8s before starting
+                3000       // bufferForPlaybackAfterRebufferMs: wait 3s after rebuffer
             )
             .setTargetBufferBytes(DefaultLoadControl.DEFAULT_TARGET_BUFFER_BYTES)
             .build()
@@ -351,7 +369,7 @@ fun DetailScreen(
     }
 
     LaunchedEffect(hasMediaLoaded, isCasting, isFullscreen) {
-        if (hasMediaLoaded && !isCasting) {
+        if (hasMediaLoaded || isCasting) {
             if (!isFullscreen) {
                 activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
             }
@@ -359,7 +377,7 @@ fun DetailScreen(
     }
 
     LaunchedEffect(deviceOrientation) {
-        if (isCasting || !hasMediaLoaded) return@LaunchedEffect
+        if (!hasMediaLoaded && !isCasting) return@LaunchedEffect
         if (deviceOrientation == Configuration.ORIENTATION_LANDSCAPE && !isFullscreen) {
             isFullscreen = true
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -616,6 +634,9 @@ fun DetailScreen(
                                     shape = RoundedCornerShape(8.dp),
                                     color = if (selected) SakuraPrimary else Color.White.copy(alpha = 0.15f),
                                     modifier = Modifier.clickable {
+                                        if (isCasting) {
+                                            pendingCastEpisodeIndex = index
+                                        }
                                         viewModel.selectEpisode(index)
                                         showFullscreenEpisodes = false
                                     }
@@ -658,7 +679,7 @@ fun DetailScreen(
                                 .show(WindowInsetsCompat.Type.systemBars())
                         }
                     }
-                    exoPlayer.pause()
+                    if (exoPlayer.isPlaying) exoPlayer.pause()
                 } else {
                     showCastSheet = false
                     castCommandHandler = null
@@ -677,6 +698,8 @@ fun DetailScreen(
                 showDisconnectDialog = true
             },
             onCastCommandRegistered = { handler -> castCommandHandler = handler },
+            pendingEpisodeIndex = pendingCastEpisodeIndex,
+            onPendingEpisodeConsumed = { pendingCastEpisodeIndex = null },
             onNextEpisode = { viewModel.selectEpisode(viewModel.state.value.currentEpisodeIndex + 1) },
             onPrevEpisode = { viewModel.selectEpisode(viewModel.state.value.currentEpisodeIndex - 1) },
             currentEpisodeIndex = state.currentEpisodeIndex,
@@ -707,7 +730,124 @@ fun DetailScreen(
         )
     }
 
+    // 下载选集弹窗
+    if (showDownloadDialog && state.video != null) {
+        val video = state.video!!
+        val currentEpisodes = state.sources.getOrNull(state.currentSourceIndex)?.episodes ?: emptyList()
+        AlertDialog(
+            onDismissRequest = { showDownloadDialog = false },
+            title = { Text("选择下载集数", color = TextPrimary, fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(4),
+                        modifier = Modifier.heightIn(max = 300.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        itemsIndexed(currentEpisodes) { index, episode ->
+                            val isSelected = index in selectedDownloadEpisodes
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isSelected) SakuraPrimary.copy(alpha = 0.2f) else DarkSurfaceVariant,
+                                border = if (isSelected) ButtonDefaults.outlinedButtonBorder else null,
+                                modifier = Modifier.clickable {
+                                    selectedDownloadEpisodes = if (isSelected) {
+                                        selectedDownloadEpisodes - index
+                                    } else {
+                                        selectedDownloadEpisodes + index
+                                    }
+                                }
+                            ) {
+                                Text(
+                                    episode.name,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+                                    color = if (isSelected) SakuraPrimary else TextSecondary,
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(onClick = {
+                            selectedDownloadEpisodes = if (selectedDownloadEpisodes.size == currentEpisodes.size) emptySet() else currentEpisodes.indices.toSet()
+                        }) {
+                            Text(
+                                if (selectedDownloadEpisodes.size == currentEpisodes.size) "取消全选" else "全选",
+                                color = SakuraPrimary
+                            )
+                        }
+                        Text(
+                            "已选 ${selectedDownloadEpisodes.size} 集",
+                            color = TextSecondary,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val episodesToDownload = selectedDownloadEpisodes.toList()
+                        val selectedCount = episodesToDownload.size
+                        showDownloadDialog = false
+                        selectedDownloadEpisodes = emptySet()
+                        Toast.makeText(context, "已添加 $selectedCount 个下载任务", Toast.LENGTH_SHORT).show()
+                        scope.launch {
+                            for (index in episodesToDownload) {
+                                val ep = currentEpisodes.getOrNull(index) ?: continue
+                                val taskId = "${video.id}_${ep.name}"
+                                val saveDir = com.ysxq.app.data.download.DownloadManager.getDownloadDir()
+                                val savePath = "${saveDir.absolutePath}/${video.id}_${ep.name}.mp4"
+                                val task = com.ysxq.app.data.download.DownloadTask(
+                                    id = taskId,
+                                    videoId = video.id,
+                                    videoName = video.name,
+                                    videoPic = video.pic,
+                                    episodeName = ep.name,
+                                    episodeUrl = ep.url,
+                                    savePath = savePath
+                                )
+                                com.ysxq.app.data.download.DownloadManager.startDownload(task)
+                            }
+                        }
+                    },
+                    enabled = selectedDownloadEpisodes.isNotEmpty()
+                ) {
+                    Text("确认下载", color = if (selectedDownloadEpisodes.isNotEmpty()) SakuraPrimary else TextTertiary)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDownloadDialog = false }) {
+                    Text("取消", color = TextTertiary)
+                }
+            },
+            containerColor = DarkSurface
+        )
+    }
+
     if (isFullscreen) {
+        if (isCasting) {
+            CastingControlPanel(
+                deviceName = castDeviceName ?: "设备",
+                progress = castProgress,
+                currentEpisodeIndex = state.currentEpisodeIndex,
+                totalEpisodes = state.sources.getOrNull(state.currentSourceIndex)?.episodes?.size ?: 0,
+                isFullscreen = true,
+                onToggleFullscreen = { toggleFullscreen() },
+                onPrevEpisode = { castCommandHandler?.invoke(-1) },
+                onStopCast = { castCommandHandler?.invoke(0) },
+                onNextEpisode = { castCommandHandler?.invoke(1) }
+            )
+        } else {
         FullscreenPlayer(
             exoPlayer = exoPlayer,
             isPlaying = isPlaying,
@@ -755,6 +895,7 @@ fun DetailScreen(
                 ?.episodes?.getOrNull(state.currentEpisodeIndex)?.name ?: "",
             onSeekCompleted = { saveWatchProgress() }
         )
+        } // end else (not casting)
     } else {
         LaunchedEffect(videoId) { viewModel.loadDetail(videoId) }
 
@@ -796,14 +937,12 @@ fun DetailScreen(
                             // Casting overlay: show when casting, pause ExoPlayer to save resources
                             if (isCasting) {
                                 CastingControlPanel(
-                                    videoTitle = video.name,
-                                    episodeName = state.sources.getOrNull(state.currentSourceIndex)
-                                        ?.episodes?.getOrNull(state.currentEpisodeIndex)?.name ?: "",
                                     deviceName = castDeviceName ?: "设备",
                                     progress = castProgress,
-                                    playbackState = castPlaybackState,
                                     currentEpisodeIndex = state.currentEpisodeIndex,
                                     totalEpisodes = state.sources.getOrNull(state.currentSourceIndex)?.episodes?.size ?: 0,
+                                    isFullscreen = false,
+                                    onToggleFullscreen = { toggleFullscreen() },
                                     onPrevEpisode = { castCommandHandler?.invoke(-1) },
                                     onStopCast = { castCommandHandler?.invoke(0) },
                                     onNextEpisode = { castCommandHandler?.invoke(1) }
@@ -1088,7 +1227,10 @@ fun DetailScreen(
                                 ) {
                                     Text("选集 (${currentSource.episodes.size})", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                                     Surface(
-                                        modifier = Modifier.clickable { showCastSheet = true },
+                                        modifier = Modifier.clickable {
+                                            showDownloadDialog = true
+                                            selectedDownloadEpisodes = setOf(state.currentEpisodeIndex)
+                                        },
                                         shape = RoundedCornerShape(14.dp),
                                         color = SakuraPrimary.copy(alpha = 0.15f)
                                     ) {
@@ -1096,9 +1238,9 @@ fun DetailScreen(
                                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Icon(Icons.Outlined.Cast, null, tint = SakuraPrimary, modifier = Modifier.size(14.dp))
+                                            Icon(Icons.Outlined.PlayCircle, null, tint = SakuraPrimary, modifier = Modifier.size(14.dp))
                                             Spacer(modifier = Modifier.width(3.dp))
-                                            Text("投屏", color = SakuraPrimary, fontSize = 12.sp)
+                                            Text("下载", color = SakuraPrimary, fontSize = 12.sp)
                                         }
                                     }
                                 }
@@ -1106,7 +1248,12 @@ fun DetailScreen(
                                 LazyVerticalGrid(columns = GridCells.Fixed(4), modifier = Modifier.fillMaxWidth().heightIn(max = 600.dp), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     itemsIndexed(currentSource.episodes) { index, episode ->
                                         val selected = index == state.currentEpisodeIndex
-                                        Surface(shape = RoundedCornerShape(8.dp), color = if (selected) SakuraPrimary.copy(alpha = 0.2f) else DarkSurfaceVariant, border = if (selected) ButtonDefaults.outlinedButtonBorder else null, modifier = Modifier.clickable { viewModel.selectEpisode(index) }) {
+                                        Surface(shape = RoundedCornerShape(8.dp), color = if (selected) SakuraPrimary.copy(alpha = 0.2f) else DarkSurfaceVariant, border = if (selected) ButtonDefaults.outlinedButtonBorder else null, modifier = Modifier.clickable {
+                                            if (isCasting) {
+                                                pendingCastEpisodeIndex = index
+                                            }
+                                            viewModel.selectEpisode(index)
+                                        }) {
                                             Text(episode.name, modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp), color = if (selected) SakuraPrimary else TextSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
                                         }
                                     }
@@ -1839,13 +1986,12 @@ private fun InfoRow(label: String, value: String, maxLines: Int = 1) {
 
 @Composable
 private fun CastingControlPanel(
-    videoTitle: String,
-    episodeName: String,
     deviceName: String,
     progress: String,
-    playbackState: String,
     currentEpisodeIndex: Int,
     totalEpisodes: Int,
+    isFullscreen: Boolean,
+    onToggleFullscreen: () -> Unit,
     onPrevEpisode: () -> Unit,
     onStopCast: () -> Unit,
     onNextEpisode: () -> Unit
@@ -1853,13 +1999,12 @@ private fun CastingControlPanel(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(Color.Black)
+            .clickable { onToggleFullscreen() },
         contentAlignment = Alignment.Center
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp),
+            modifier = Modifier.padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
@@ -1867,116 +2012,91 @@ private fun CastingControlPanel(
                 Icons.Filled.Tv,
                 contentDescription = null,
                 tint = SakuraPrimary,
-                modifier = Modifier.size(56.dp)
+                modifier = Modifier.size(if (isFullscreen) 48.dp else 32.dp)
             )
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                "投屏中",
-                color = SakuraPrimary,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(4.dp))
+            Text("投屏中", color = SakuraPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(2.dp))
             Text(
                 deviceName,
-                color = Color.White.copy(alpha = 0.9f),
-                fontSize = 15.sp,
+                color = Color.White,
+                fontSize = if (isFullscreen) 15.sp else 13.sp,
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                videoTitle,
-                color = TextPrimary,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = 16.dp)
-            )
-            if (episodeName.isNotBlank()) {
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    episodeName,
-                    color = TextSecondary,
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
-            }
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
                 progress,
-                color = TextSecondary,
-                fontSize = 13.sp
+                color = Color.White,
+                fontSize = if (isFullscreen) 16.sp else 14.sp,
+                fontWeight = FontWeight.Medium
             )
-            if (playbackState.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    playbackState,
-                    color = TextTertiary,
-                    fontSize = 11.sp
-                )
-            }
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(if (isFullscreen) 14.dp else 8.dp))
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(if (isFullscreen) 32.dp else 20.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(
-                    onClick = onPrevEpisode,
+                CastTextButton(
+                    text = "上一集",
                     enabled = currentEpisodeIndex > 0,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .background(DarkSurfaceVariant, CircleShape)
-                ) {
-                    Icon(
-                        Icons.Filled.SkipPrevious,
-                        contentDescription = "上一集",
-                        tint = if (currentEpisodeIndex > 0) SakuraPrimary else TextTertiary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-                IconButton(
+                    onClick = onPrevEpisode,
+                    fontSize = if (isFullscreen) 16.sp else 14.sp
+                )
+                CastTextButton(
+                    text = "结束投屏",
+                    enabled = true,
                     onClick = onStopCast,
-                    modifier = Modifier
-                        .size(56.dp)
-                        .background(Color(0xFFFF5252), CircleShape)
-                ) {
-                    Icon(
-                        Icons.Filled.Close,
-                        contentDescription = "停止投屏",
-                        tint = Color.White,
-                        modifier = Modifier.size(28.dp)
-                    )
-                }
-                IconButton(
-                    onClick = onNextEpisode,
+                    isStop = true,
+                    fontSize = if (isFullscreen) 16.sp else 14.sp
+                )
+                CastTextButton(
+                    text = "下一集",
                     enabled = currentEpisodeIndex < totalEpisodes - 1,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .background(DarkSurfaceVariant, CircleShape)
-                ) {
-                    Icon(
-                        Icons.Filled.SkipNext,
-                        contentDescription = "下一集",
-                        tint = if (currentEpisodeIndex < totalEpisodes - 1) SakuraPrimary else TextTertiary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-            }
-            if (totalEpisodes > 1) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    "第 ${currentEpisodeIndex + 1} / $totalEpisodes 集",
-                    color = TextTertiary,
-                    fontSize = 12.sp
+                    onClick = onNextEpisode,
+                    fontSize = if (isFullscreen) 16.sp else 14.sp
                 )
             }
+            if (!isFullscreen) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("点击切换全屏", color = Color.White.copy(alpha = 0.3f), fontSize = 10.sp)
+            }
         }
+    }
+}
+
+@Composable
+private fun CastTextButton(
+    text: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    isStop: Boolean = false,
+    fontSize: TextUnit = 14.sp
+) {
+    val bgColor = when {
+        isStop -> Color(0xFFFF5252)
+        enabled -> Color.White.copy(alpha = 0.15f)
+        else -> Color.White.copy(alpha = 0.08f)
+    }
+    val textColor = when {
+        isStop -> Color.White
+        enabled -> Color.White
+        else -> Color.White.copy(alpha = 0.3f)
+    }
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(bgColor)
+            .clickable(enabled = enabled) { onClick() }
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text,
+            color = textColor,
+            fontSize = fontSize,
+            fontWeight = if (isStop) FontWeight.Bold else FontWeight.Medium
+        )
     }
 }
 
@@ -1997,7 +2117,9 @@ private fun CastDeviceSheet(
     totalEpisodes: Int,
     getEpisodeUrl: () -> String?,
     onStopCastingRegistered: (() -> Unit) -> Unit,
-    onSaveCastingProgress: (currentMs: Long, totalMs: Long) -> Unit
+    onSaveCastingProgress: (currentMs: Long, totalMs: Long) -> Unit,
+    pendingEpisodeIndex: Int? = null,
+    onPendingEpisodeConsumed: () -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
     var devices by remember { mutableStateOf<List<com.yinnho.upnpcast.DLNACast.Device>>(emptyList()) }
@@ -2031,12 +2153,23 @@ private fun CastDeviceSheet(
         onCastStateChanged(false, null, "")
         val sid = connectedSessionId
         val server = proxyServer
+        val deviceToStop = currentCastDevice
         connectedSessionId = null
         proxyServer = null
         scope.launch(Dispatchers.IO) {
+            // Get final TV position before stopping
+            try {
+                val pos = DirectDlnaCaster.getPositionInfo()
+                if (pos != null && pos.first > 0) {
+                    onSaveCastingProgress(pos.first, pos.second)
+                }
+            } catch (_: Exception) { }
+            try { deviceToStop?.let { DirectDlnaCaster.stop(it) } } catch (_: Exception) { }
             try { DLNACast.stop() } catch (_: Exception) { }
+            DirectDlnaCaster.clearCache()
             sid?.let { DlnaProxyService.sessionManager?.destroySession(it) }
-            server?.stop()
+            server?.clearSession(sid ?: "")
+            server?.shutdown()
             DlnaProxyService.stop(context)
         }
     }
@@ -2196,10 +2329,10 @@ private fun CastDeviceSheet(
                                                 proxyServer = server
 
                                                 // Get proxy URL
-                                                val proxyUrl = server.getStreamUrl(proxySession.sessionId)
+                                                val proxyUrl = server.getPlaylistUrl(proxySession.sessionId)
 
-                                                // Cast proxy URL to device
-                                                val success = DLNACast.castToDevice(device, proxyUrl, videoTitle)
+                                                // Cast proxy URL to device via DirectDlnaCaster (proper DLNA.ORG_PN)
+                                                val success = DirectDlnaCaster.cast(device, proxyUrl, videoTitle)
                                                 if (success) {
                                                     isCasting = true
                                                     connectedSessionId = proxySession.sessionId
@@ -2210,9 +2343,13 @@ private fun CastDeviceSheet(
                                                     suspend fun switchEpisode(isNext: Boolean): Boolean {
                                                         isSwitchingEpisode = true
                                                         try {
-                                                            DLNACast.stop()
+                                                            val dev = currentCastDevice
+                                                            if (dev != null) {
+                                                                try { DirectDlnaCaster.stop(dev) } catch (_: Exception) { }
+                                                            }
                                                             connectedSessionId?.let { sid ->
                                                                 DlnaProxyService.sessionManager?.destroySession(sid)
+                                                                proxyServer?.clearSession(sid)
                                                             }
                                                             connectedSessionId = null
 
@@ -2230,16 +2367,62 @@ private fun CastDeviceSheet(
                                                                             it.start()
                                                                             proxyServer = it
                                                                         }
-                                                                    val newProxyUrl = activeServer.getStreamUrl(newSession.sessionId)
-                                                                    connectedSessionId = newSession.sessionId
-                                                                    val dev = currentCastDevice
+                                                                    val newProxyUrl = activeServer.getPlaylistUrl(newSession.sessionId)
                                                                     if (dev != null) {
-                                                                        val ok = DLNACast.castToDevice(dev, newProxyUrl, videoTitle)
+                                                                        val ok = DirectDlnaCaster.cast(dev, newProxyUrl, videoTitle)
                                                                         if (ok) {
+                                                                            connectedSessionId = newSession.sessionId
                                                                             isSwitchingEpisode = false
                                                                             return true
                                                                         }
                                                                     }
+                                                                    // Cast failed or dev is null — clean up new session
+                                                                    DlnaProxyService.sessionManager?.destroySession(newSession.sessionId)
+                                                                    activeServer.clearSession(newSession.sessionId)
+                                                                }
+                                                            }
+                                                        } catch (_: Exception) { }
+                                                        isSwitchingEpisode = false
+                                                        return false
+                                                    }
+
+                                                    suspend fun switchEpisodeToIndex(targetIndex: Int): Boolean {
+                                                        isSwitchingEpisode = true
+                                                        try {
+                                                            val dev = currentCastDevice
+                                                            if (dev != null) {
+                                                                try { DirectDlnaCaster.stop(dev) } catch (_: Exception) { }
+                                                            }
+                                                            connectedSessionId?.let { sid ->
+                                                                DlnaProxyService.sessionManager?.destroySession(sid)
+                                                                proxyServer?.clearSession(sid)
+                                                            }
+                                                            connectedSessionId = null
+
+                                                            delay(300)
+
+                                                            val newUrl = getEpisodeUrl()
+                                                            if (newUrl != null) {
+                                                                val newSession = withContext(Dispatchers.IO) {
+                                                                    DlnaProxyService.sessionManager?.createSession(newUrl, 0L)
+                                                                }
+                                                                if (newSession != null) {
+                                                                    val activeServer = proxyServer
+                                                                        ?: DlnaProxyServer().also {
+                                                                            it.start()
+                                                                            proxyServer = it
+                                                                        }
+                                                                    val newProxyUrl = activeServer.getPlaylistUrl(newSession.sessionId)
+                                                                    if (dev != null) {
+                                                                        val ok = DirectDlnaCaster.cast(dev, newProxyUrl, videoTitle)
+                                                                        if (ok) {
+                                                                            connectedSessionId = newSession.sessionId
+                                                                            isSwitchingEpisode = false
+                                                                            return true
+                                                                        }
+                                                                    }
+                                                                    DlnaProxyService.sessionManager?.destroySession(newSession.sessionId)
+                                                                    activeServer.clearSession(newSession.sessionId)
                                                                 }
                                                             }
                                                         } catch (_: Exception) { }
@@ -2266,9 +2449,21 @@ private fun CastDeviceSheet(
                                                                 continue
                                                             }
 
-                                                            val prog = DLNACast.getProgress()
+                                                            // Handle episode selection from grid while casting
+                                                            val pendingEp = pendingEpisodeIndex
+                                                            if (pendingEp != null) {
+                                                                onPendingEpisodeConsumed()
+                                                                val switched = switchEpisodeToIndex(pendingEp)
+                                                                if (!switched) break
+                                                                stoppedCount = 0
+                                                                pollCount = 0
+                                                                continue
+                                                            }
+
                                                             var shouldAutoNext = false
                                                             var sessionComplete = false
+                                                            var currentMs = 0L
+                                                            var totalMs = 0L
 
                                                             // Check proxy session completion (most reliable for M3U8 streams)
                                                             val sid = connectedSessionId
@@ -2276,14 +2471,28 @@ private fun CastDeviceSheet(
                                                                 sessionComplete = DlnaProxyService.sessionManager?.isSessionComplete(sid) ?: false
                                                             }
 
-                                                            if (prog != null) {
-                                                                val currentMs = prog.first
-                                                                val totalMs = prog.second
+                                                            // Query real TV progress via DirectDlnaCaster SOAP
+                                                            val prog = DirectDlnaCaster.getPositionInfo()
+                                                            if (prog != null && (prog.first > 0 || prog.second > 0)) {
+                                                                currentMs = prog.first
+                                                                totalMs = prog.second
+                                                            }
+
+                                                            // Fallback: estimated progress from proxy session
+                                                            if (currentMs == 0L && totalMs == 0L && sid != null) {
+                                                                val estimated = DlnaProxyService.sessionManager?.getEstimatedProgress(sid)
+                                                                if (estimated != null && estimated.second > 0) {
+                                                                    currentMs = estimated.first
+                                                                    totalMs = estimated.second
+                                                                }
+                                                            }
+
+                                                            if (totalMs > 0) {
                                                                 castProgress = "${formatMs(currentMs)} / ${formatMs(totalMs)}"
                                                                 onCastProgressUpdate(castProgress, castPlaybackState)
 
                                                                 // Auto-next when near end
-                                                                if (totalMs > 0 && currentMs >= totalMs - 3000 && currentEpisodeIndex < totalEpisodes - 1) {
+                                                                if (currentMs >= totalMs - 3000 && currentEpisodeIndex < totalEpisodes - 1) {
                                                                     shouldAutoNext = true
                                                                 }
 
@@ -2296,13 +2505,15 @@ private fun CastDeviceSheet(
                                                             if (sessionComplete && currentEpisodeIndex < totalEpisodes - 1) {
                                                                 shouldAutoNext = true
                                                             }
-                                                            val st = DLNACast.getState()
-                                                            castPlaybackState = st.playbackState.name
+
+                                                            // Query real TV transport state via DirectDlnaCaster SOAP
+                                                            val transportState = DirectDlnaCaster.getTransportState() ?: "UNKNOWN"
+                                                            castPlaybackState = transportState
                                                             onCastProgressUpdate(castProgress, castPlaybackState)
 
                                                             // Detect TV playback stopped (not user-initiated)
                                                             // Require 2 consecutive STOPPED states to avoid false triggers
-                                                            if (st.playbackState.name == "STOPPED" && !userStopped) {
+                                                            if (transportState == "STOPPED" && !userStopped && !isSwitchingEpisode) {
                                                                 stoppedCount++
                                                                 if (stoppedCount >= 2 && currentEpisodeIndex < totalEpisodes - 1) {
                                                                     shouldAutoNext = true
@@ -2312,7 +2523,7 @@ private fun CastDeviceSheet(
                                                             } else {
                                                                 stoppedCount = 0
                                                             }
-                                                            lastPlaybackState = st.playbackState.name
+                                                            lastPlaybackState = transportState
 
                                                             if (shouldAutoNext && !userStopped) {
                                                                 val switched = switchEpisode(isNext = true)
@@ -2322,13 +2533,18 @@ private fun CastDeviceSheet(
                                                         } catch (_: Exception) {
                                                             if (!userStopped && isCasting) {
                                                                 onCastDisconnected()
+                                                                break
                                                             }
                                                         }
+                                                    }
+                                                    // while loop exited — cleanup if not user-initiated stop
+                                                    if (!userStopped) {
+                                                        stopCasting()
                                                     }
                                                 } else {
                                                     // Cast failed, clean up
                                                     sessionManager.destroySession(proxySession.sessionId)
-                                                    server.stop()
+                                                    server.shutdown()
                                                     proxyServer = null
                                                     castError = "投屏失败，请重试"
                                                     isConnecting = false

@@ -1,5 +1,6 @@
 package com.ysxq.app.ui.screens
 
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -15,6 +16,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -30,6 +35,7 @@ import com.ysxq.app.ui.components.*
 import com.ysxq.app.ui.theme.*
 import com.ysxq.app.viewmodel.SearchViewModel
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SearchScreen(
     onVideoClick: (Int) -> Unit,
@@ -56,6 +62,8 @@ fun SearchScreen(
             if (shouldLoadMore) viewModel.searchMore()
         }
     }
+
+    var showClearHistoryDialog by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -199,15 +207,6 @@ fun SearchScreen(
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
-                                if (video.remarks.isNotBlank() || video.year.isNotBlank()) {
-                                    Text(
-                                        text = listOf(video.remarks, video.year).filter { it.isNotBlank() }.joinToString(" · "),
-                                        color = TextTertiary,
-                                        fontSize = 12.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
                             }
                         }
                     }
@@ -219,26 +218,120 @@ fun SearchScreen(
                 }
             }
             else -> {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(48.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Text(
-                        text = "输入关键词开始搜索",
-                        color = TextTertiary,
-                        fontSize = 14.sp
-                    )
-                    Text(
-                        text = "支持影片名称、演员、导演等",
-                        color = TextTertiary.copy(alpha = 0.7f),
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
+                // 空状态：显示搜索历史或提示
+                if (state.searchHistory.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "搜索历史",
+                                color = TextSecondary,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                            IconButton(
+                                onClick = { showClearHistoryDialog = true },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    Icons.Filled.DeleteOutline,
+                                    contentDescription = "清空历史",
+                                    tint = TextTertiary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            state.searchHistory.forEach { query ->
+                                SuggestionChip(
+                                    onClick = {
+                                        viewModel.updateQuery(query)
+                                        viewModel.search()
+                                    },
+                                    label = {
+                                        Text(
+                                            text = query,
+                                            color = TextPrimary,
+                                            fontSize = 13.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    },
+                                    icon = {
+                                        Icon(
+                                            Icons.Filled.History,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(14.dp),
+                                            tint = TextTertiary
+                                        )
+                                    },
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = SuggestionChipDefaults.suggestionChipColors(
+                                        containerColor = DarkSurface,
+                                        labelColor = TextPrimary,
+                                        iconContentColor = TextTertiary
+                                    ),
+                                    border = null
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(48.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            text = "输入关键词开始搜索",
+                            color = TextTertiary,
+                            fontSize = 14.sp
+                        )
+                        Text(
+                            text = "支持影片名称、演员、导演等",
+                            color = TextTertiary.copy(alpha = 0.7f),
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                    }
                 }
             }
         }
+    }
+
+    if (showClearHistoryDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearHistoryDialog = false },
+            title = { Text("清空搜索历史", color = TextPrimary) },
+            text = { Text("确定要清空所有搜索历史吗？", color = TextSecondary) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showClearHistoryDialog = false
+                        viewModel.clearHistory()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF6B6B))
+                ) { Text("清空", color = Color.White) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearHistoryDialog = false }) {
+                    Text("取消", color = TextTertiary)
+                }
+            },
+            containerColor = DarkSurface
+        )
     }
 }

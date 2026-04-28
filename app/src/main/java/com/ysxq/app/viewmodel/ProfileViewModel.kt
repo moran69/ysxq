@@ -8,7 +8,7 @@ import com.ysxq.app.data.auth.AuthRepository
 import com.ysxq.app.data.auth.AuthState
 import com.ysxq.app.data.auth.User
 import com.ysxq.app.data.local.userPreferences
-import com.ysxq.app.data.sync.ProfileSyncRepository
+
 import coil3.SingletonImageLoader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -134,7 +134,6 @@ class ProfileViewModel(application: Application) : AndroidViewModel(application)
             AuthRepository.updateProfile(displayName = nickname)
                 .onSuccess { user ->
                     prefs.saveUserLogin(user, AuthRepository.getAccessToken(), AuthRepository.getRefreshToken())
-                    ProfileSyncRepository().saveDisplayNameToCloud(nickname)
                     _uiState.value = _uiState.value.copy(
                         showEditProfileDialog = false,
                         isUpdating = false

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Person
@@ -34,7 +35,7 @@ import com.ysxq.app.data.local.userPreferences
 import com.ysxq.app.data.local.watchHistoryStore
 import com.ysxq.app.data.storage.CloudBaseStorageHelper
 import com.ysxq.app.data.sync.FavoritesSyncRepository
-import com.ysxq.app.data.sync.ProfileSyncRepository
+
 import com.ysxq.app.data.sync.WatchHistorySyncRepository
 import com.ysxq.app.ui.screens.*
 import com.ysxq.app.ui.theme.*
@@ -63,13 +64,6 @@ fun AppNavHost(
                 withContext(Dispatchers.IO) {
                     FavoritesSyncRepository(favStore).pullFromCloud()
                     WatchHistorySyncRepository(histStore).pullFromCloud()
-                }
-            } catch (_: Exception) { }
-            try {
-                val profile = ProfileSyncRepository().loadProfileFromCloud()
-                if (profile != null) {
-                    AuthRepository.applyCloudAvatarUrl(profile.first)
-                    AuthRepository.applyCloudDisplayName(profile.second)
                 }
             } catch (_: Exception) { }
         }
@@ -102,7 +96,7 @@ fun AppNavHost(
         }
     }
 
-    val bottomBarTabs = listOf(Screen.Home, Screen.Category, Screen.Profile)
+    val bottomBarTabs = listOf(Screen.Home, Screen.Category, Screen.Download, Screen.Profile)
     val showBottomBar = currentRoute in bottomBarTabs.map { it.route }
     val showSplash = currentRoute == Screen.Splash.route
 
@@ -125,10 +119,11 @@ fun AppNavHost(
                         label = { Text("首页", fontSize = 11.sp) },
                         selected = currentRoute == Screen.Home.route,
                         onClick = {
-                            navController.navigate(Screen.Home.route) {
-                                popUpTo(Screen.Home.route) { saveState = true }
-                                launchSingleTop = true
-                                restoreState = true
+                            if (currentRoute != Screen.Home.route) {
+                                navController.navigate(Screen.Home.route) {
+                                    popUpTo(Screen.Home.route) { inclusive = true }
+                                    launchSingleTop = true
+                                }
                             }
                         },
                         colors = NavigationBarItemDefaults.colors(
@@ -150,10 +145,37 @@ fun AppNavHost(
                         label = { Text("分类", fontSize = 11.sp) },
                         selected = currentRoute == Screen.Category.route,
                         onClick = {
-                            navController.navigate(Screen.Category.createRoute()) {
-                                popUpTo(Screen.Home.route) { saveState = true }
-                                launchSingleTop = true
-                                restoreState = true
+                            if (currentRoute != Screen.Category.route) {
+                                navController.navigate(Screen.Category.createRoute()) {
+                                    popUpTo(Screen.Home.route) { inclusive = false }
+                                    launchSingleTop = true
+                                }
+                            }
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = SakuraPrimary,
+                            selectedTextColor = SakuraPrimary,
+                            unselectedIconColor = TextTertiary,
+                            unselectedTextColor = TextTertiary,
+                            indicatorColor = SakuraPrimary.copy(alpha = 0.15f)
+                        )
+                    )
+                    NavigationBarItem(
+                        icon = {
+                            Icon(
+                                if (currentRoute == Screen.Download.route) Icons.Filled.PlayCircle
+                                else Icons.Filled.PlayCircle,
+                                contentDescription = null
+                            )
+                        },
+                        label = { Text("下载", fontSize = 11.sp) },
+                        selected = currentRoute == Screen.Download.route,
+                        onClick = {
+                            if (currentRoute != Screen.Download.route) {
+                                navController.navigate(Screen.Download.route) {
+                                    popUpTo(Screen.Home.route) { inclusive = false }
+                                    launchSingleTop = true
+                                }
                             }
                         },
                         colors = NavigationBarItemDefaults.colors(
@@ -175,10 +197,11 @@ fun AppNavHost(
                         label = { Text("我的", fontSize = 11.sp) },
                         selected = currentRoute == Screen.Profile.route,
                         onClick = {
-                            navController.navigate(Screen.Profile.route) {
-                                popUpTo(Screen.Home.route) { saveState = true }
-                                launchSingleTop = true
-                                restoreState = true
+                            if (currentRoute != Screen.Profile.route) {
+                                navController.navigate(Screen.Profile.route) {
+                                    popUpTo(Screen.Home.route) { inclusive = false }
+                                    launchSingleTop = true
+                                }
                             }
                         },
                         colors = NavigationBarItemDefaults.colors(
@@ -336,6 +359,31 @@ fun AppNavHost(
                     onVideoClick = { videoId ->
                         navController.navigate(Screen.Detail.createRoute(videoId))
                     }
+                )
+            }
+
+            composable(Screen.Download.route) {
+                DownloadScreen(
+                    onBack = { navController.popBackStack() },
+                    onPlayLocal = { videoId, episodeIndex ->
+                        navController.navigate(Screen.LocalPlayer.createRoute(videoId, episodeIndex))
+                    }
+                )
+            }
+
+            composable(
+                Screen.LocalPlayer.route,
+                arguments = listOf(
+                    navArgument("videoId") { type = NavType.IntType },
+                    navArgument("episodeIndex") { type = NavType.IntType; defaultValue = 0 }
+                )
+            ) { entry ->
+                val videoId = entry.arguments?.getInt("videoId") ?: return@composable
+                val episodeIndex = entry.arguments?.getInt("episodeIndex") ?: 0
+                LocalPlayerScreen(
+                    videoId = videoId,
+                    initialEpisodeIndex = episodeIndex,
+                    onBack = { navController.popBackStack() }
                 )
             }
 

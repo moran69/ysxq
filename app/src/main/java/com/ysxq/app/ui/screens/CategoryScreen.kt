@@ -111,29 +111,31 @@ fun CategoryScreen(
             // 筛选栏加载状态
             val filtersLoading = state.areaOptions.size <= 1 && state.yearOptions.size <= 1 && state.isLoading
 
+            // 地区筛选 — 始终渲染
             if (filtersLoading) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(12.dp),
                         color = SakuraPrimary,
-                        strokeWidth = 2.dp
+                        strokeWidth = 1.5.dp
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("加载筛选选项...", color = TextTertiary, fontSize = 12.sp)
                 }
             } else {
-                // 地区筛选
                 FilterChipsRow(
                     label = "地区",
                     options = state.areaOptions,
                     selectedIndex = state.areaOptions.indexOf(state.selectedArea).coerceAtLeast(0),
                     onSelect = { viewModel.selectArea(state.areaOptions[it]) }
                 )
+            }
 
-                // 年份筛选
+            // 年份筛选 — 始终渲染
+            if (!filtersLoading) {
                 FilterChipsRow(
                     label = "年份",
                     options = state.yearOptions,

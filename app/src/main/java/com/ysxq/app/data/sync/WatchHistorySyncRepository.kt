@@ -23,15 +23,33 @@ class WatchHistorySyncRepository(
     companion object {
         private const val TAG = "HistorySync"
         private const val MODEL_NAME = "watch_history"
+        private val AUTH_ERROR_KEYWORDS = listOf("unauthenticated", "unauthorized", "token", "invalid_token", "access_denied", "login", "id_token_expired", "permission", "auth failure")
+    }
+
+    private fun isAuthError(errorMsg: String?): Boolean {
+        if (errorMsg.isNullOrBlank()) return false
+        val lower = errorMsg.lowercase()
+        return AUTH_ERROR_KEYWORDS.any { lower.contains(it) }
+    }
+
+    private suspend fun refreshAndGetToken(): String? {
+        return AuthRepository.getValidAccessToken()
     }
 
     suspend fun upsertToCloud(entry: WatchHistoryEntry) {
-        withContext(Dispatchers.IO) {
-            val token = AuthRepository.getAccessToken() ?: return@withContext
-            val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
-            try {
+        syncMutex.withLock {
+            withContext(Dispatchers.IO) {
+                var token = AuthRepository.getValidAccessToken() ?: return@withContext
+                val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
+                try {
                 // Step 1: Query for existing record by uid + videoId
-                val existingRecord = findExistingRecord(token, uid, entry.videoId)
+                var existingRecord = findExistingRecord(token, uid, entry.videoId)
+
+                // If auth error, refresh token and retry
+                if (existingRecord == null) {
+                    // We can't distinguish "not found" from "auth error" here
+                    // So we proceed and handle auth errors in create/update
+                }
 
                 if (existingRecord != null) {
                     // Step 2a: Update existing record using _id filter
@@ -47,7 +65,7 @@ class WatchHistorySyncRepository(
                             put("positionMs", entry.positionMs)
                             put("durationMs", entry.durationMs)
                         }
-                        val response = api.updateByFilter(
+                        var response = api.updateByFilter(
                             "Bearer $token",
                             MODEL_NAME,
                             CloudBaseDbUpdateByFilterRequest(
@@ -57,13 +75,27 @@ class WatchHistorySyncRepository(
                                 data = updateData
                             )
                         )
-                        val errMsg = response.getErrorMessage()
+                        var errMsg = response.getErrorMessage()
+                        if (isAuthError(errMsg)) {
+                            token = refreshAndGetToken() ?: return@withContext
+                            response = api.updateByFilter(
+                                "Bearer $token",
+                                MODEL_NAME,
+                                CloudBaseDbUpdateByFilterRequest(
+                                    filter = CloudBaseDbFilter(
+                                        where = mapOf("_id" to buildJsonObject { put("\$eq", recordId) })
+                                    ),
+                                    data = updateData
+                                )
+                            )
+                            errMsg = response.getErrorMessage()
+                        }
                         if (errMsg != null) {
                             Log.e(TAG, "云端更新历史失败: $errMsg")
                         }
                     }
                 } else {
-                    // Step 2b: Create new record — CloudBase create API requires data wrapped in "data" field
+                    // Step 2b: Create new record
                     val fields = buildJsonObject {
                         put("uid", uid)
                         put("videoId", entry.videoId)
@@ -77,8 +109,13 @@ class WatchHistorySyncRepository(
                         put("durationMs", entry.durationMs)
                     }
                     val createBody = buildJsonObject { put("data", fields) }
-                    val response = api.create("Bearer $token", MODEL_NAME, createBody)
-                    val errMsg = response.getErrorMessage()
+                    var response = api.create("Bearer $token", MODEL_NAME, createBody)
+                    var errMsg = response.getErrorMessage()
+                    if (isAuthError(errMsg)) {
+                        token = refreshAndGetToken() ?: return@withContext
+                        response = api.create("Bearer $token", MODEL_NAME, createBody)
+                        errMsg = response.getErrorMessage()
+                    }
                     if (errMsg != null) {
                         Log.e(TAG, "云端同步历史失败: $errMsg")
                     }
@@ -86,6 +123,7 @@ class WatchHistorySyncRepository(
             } catch (e: Exception) {
                 Log.w(TAG, "云端同步历史失败: ${e.message}")
             }
+        }
         }
     }
 
@@ -106,6 +144,10 @@ class WatchHistorySyncRepository(
                     getCount = false
                 )
             )
+            val errMsg = response.getErrorMessage()
+            if (errMsg != null) {
+                Log.w(TAG, "查询云端历史失败: $errMsg")
+            }
             val records = response.data?.records ?: return null
             records.firstOrNull()
         } catch (e: Exception) {
@@ -117,19 +159,24 @@ class WatchHistorySyncRepository(
     suspend fun deleteFromCloud(videoId: Int) {
         syncMutex.withLock {
             withContext(Dispatchers.IO) {
-                val token = AuthRepository.getAccessToken() ?: return@withContext
-                val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
-                try {
-                    val filter = CloudBaseDbDeleteByFilterRequest(
-                        filter = CloudBaseDbFilter(
-                            where = mapOf(
-                                "uid" to buildJsonObject { put("\$eq", uid) },
-                                "videoId" to buildJsonObject { put("\$eq", videoId) }
+                    var token = AuthRepository.getValidAccessToken() ?: return@withContext
+                    val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
+                    try {
+                        val filter = CloudBaseDbDeleteByFilterRequest(
+                            filter = CloudBaseDbFilter(
+                                where = mapOf(
+                                    "uid" to buildJsonObject { put("\$eq", uid) },
+                                    "videoId" to buildJsonObject { put("\$eq", videoId) }
+                                )
                             )
                         )
-                    )
-                    val response = api.deleteByFilter("Bearer $token", MODEL_NAME, filter)
-                    val errMsg = response.getErrorMessage()
+                        var response = api.deleteByFilter("Bearer $token", MODEL_NAME, filter)
+                    var errMsg = response.getErrorMessage()
+                    if (isAuthError(errMsg)) {
+                        token = refreshAndGetToken() ?: return@withContext
+                        response = api.deleteByFilter("Bearer $token", MODEL_NAME, filter)
+                        errMsg = response.getErrorMessage()
+                    }
                     if (errMsg != null) {
                         Log.e(TAG, "云端删除历史失败: $errMsg")
                     }
@@ -143,16 +190,21 @@ class WatchHistorySyncRepository(
     suspend fun clearCloud() {
         syncMutex.withLock {
             withContext(Dispatchers.IO) {
-                val token = AuthRepository.getAccessToken() ?: return@withContext
-                val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
-                try {
-                    val filter = CloudBaseDbDeleteByFilterRequest(
-                        filter = CloudBaseDbFilter(
-                            where = mapOf("uid" to buildJsonObject { put("\$eq", uid) })
+                    var token = AuthRepository.getValidAccessToken() ?: return@withContext
+                    val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
+                    try {
+                        val filter = CloudBaseDbDeleteByFilterRequest(
+                            filter = CloudBaseDbFilter(
+                                where = mapOf("uid" to buildJsonObject { put("\$eq", uid) })
+                            )
                         )
-                    )
-                    val response = api.deleteByFilter("Bearer $token", MODEL_NAME, filter)
-                    val errMsg = response.getErrorMessage()
+                        var response = api.deleteByFilter("Bearer $token", MODEL_NAME, filter)
+                    var errMsg = response.getErrorMessage()
+                    if (isAuthError(errMsg)) {
+                        token = refreshAndGetToken() ?: return@withContext
+                        response = api.deleteByFilter("Bearer $token", MODEL_NAME, filter)
+                        errMsg = response.getErrorMessage()
+                    }
                     if (errMsg != null) {
                         Log.e(TAG, "云端清空历史失败: $errMsg")
                     }
@@ -166,7 +218,7 @@ class WatchHistorySyncRepository(
     suspend fun pullFromCloud(): Result<Boolean> {
         return syncMutex.withLock {
             withContext(Dispatchers.IO) {
-                val token = AuthRepository.getAccessToken()
+                var token = AuthRepository.getValidAccessToken()
                 if (token == null) {
                     return@withContext Result.success(false)
                 }
@@ -175,7 +227,7 @@ class WatchHistorySyncRepository(
                     return@withContext Result.success(false)
                 }
                 try {
-                    val response = api.list(
+                    var response = api.list(
                         "Bearer $token",
                         MODEL_NAME,
                         CloudBaseDbListRequest(
@@ -188,7 +240,24 @@ class WatchHistorySyncRepository(
                             getCount = false
                         )
                     )
-                    val listErr = response.getErrorMessage()
+                    var listErr = response.getErrorMessage()
+                    if (isAuthError(listErr)) {
+                        token = refreshAndGetToken() ?: return@withContext Result.failure(Exception("登录已过期，请重新登录"))
+                        response = api.list(
+                            "Bearer $token",
+                            MODEL_NAME,
+                            CloudBaseDbListRequest(
+                                filter = CloudBaseDbFilter(
+                                    where = mapOf("uid" to buildJsonObject { put("\$eq", uid) })
+                                ),
+                                orderBy = listOf(buildJsonObject { put("updatedAt", "desc") }),
+                                pageSize = 100,
+                                pageNumber = 1,
+                                getCount = false
+                            )
+                        )
+                        listErr = response.getErrorMessage()
+                    }
                     if (listErr != null) {
                         Log.e(TAG, "从云端拉取历史失败: $listErr")
                         return@withContext Result.failure(Exception(listErr))

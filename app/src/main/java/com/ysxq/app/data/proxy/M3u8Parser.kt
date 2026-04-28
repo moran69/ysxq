@@ -2,7 +2,7 @@ package com.ysxq.app.data.proxy
 
 import java.net.URI
 
-data class M3u8Segment(val url: String, val duration: Double)
+data class M3u8Segment(val url: String, val duration: Double, val isAfterDiscontinuity: Boolean = false)
 
 data class M3u8Playlist(
     val segments: List<M3u8Segment>,
@@ -33,12 +33,17 @@ fun parseM3u8(content: String, baseUrl: String): M3u8Playlist? {
     var totalDuration = 0.0
     var initSegmentUri: String? = null
     var pendingDuration = -1.0
+    var afterDiscontinuity = false
     var i = 0
 
     while (i < lines.size) {
         val line = lines[i].trim()
 
         when {
+            line == "#EXT-X-DISCONTINUITY" -> {
+                afterDiscontinuity = true
+                i++
+            }
             line.isEmpty() || line.startsWith("#") && !line.startsWith("#EXTINF:") && !line.startsWith("#EXT-X-MAP:") -> {
                 i++
             }
@@ -76,7 +81,8 @@ fun parseM3u8(content: String, baseUrl: String): M3u8Playlist? {
                     } catch (_: Exception) {
                         urlLine
                     }
-                    segments.add(M3u8Segment(url = resolvedUrl, duration = pendingDuration))
+                    segments.add(M3u8Segment(url = resolvedUrl, duration = pendingDuration, isAfterDiscontinuity = afterDiscontinuity))
+                    afterDiscontinuity = false
                     totalDuration += pendingDuration
                     pendingDuration = -1.0
                     i = j + 1

@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 object AuthRepository {
 
@@ -37,6 +39,8 @@ object AuthRepository {
     private val accessTokenHolder = MutableStateFlow<String?>(null)
     @Volatile
     private var refreshTokenHolder: String? = null
+    @Volatile
+    private var tokenExpiresAt: Long = 0L
 
     private val _logoutReason = MutableStateFlow<String?>(null)
     val logoutReason: Flow<String?> = _logoutReason.asStateFlow()
@@ -194,32 +198,20 @@ object AuthRepository {
             } else {
                 user
             }
-            val finalUser = if (preservedUser.photoUrl.isNullOrBlank()) {
-                try {
-                    val profile = com.ysxq.app.data.sync.ProfileSyncRepository().loadProfileFromCloud()
-                    if (profile != null && !profile.first.isNullOrBlank()) {
-                        preservedUser.copy(photoUrl = profile.first)
-                    } else {
-                        preservedUser
-                    }
-                } catch (_: Exception) { preservedUser }
-            } else {
-                preservedUser
-            }
-            _currentUser.value = finalUser
-            _authState.value = AuthState.Authenticated(finalUser)
+            _currentUser.value = preservedUser
+            _authState.value = AuthState.Authenticated(preservedUser)
             val app = com.ysxq.app.App.instance
             if (app != null) {
                 val prefs = app.userPreferences()
-                prefs.saveUserLogin(finalUser)
-                if (!finalUser.photoUrl.isNullOrBlank() && finalUser.photoUrl.startsWith("cloud://")) {
-                    val resolved = com.ysxq.app.data.storage.CloudBaseStorageHelper.resolveAvatarUrl(finalUser.photoUrl)
+                prefs.saveUserLogin(preservedUser)
+                if (!preservedUser.photoUrl.isNullOrBlank() && preservedUser.photoUrl.startsWith("cloud://")) {
+                    val resolved = com.ysxq.app.data.storage.CloudBaseStorageHelper.resolveAvatarUrl(preservedUser.photoUrl)
                     if (resolved != null) {
                         prefs.saveResolvedAvatarUrl(resolved)
                     }
                 }
             }
-            Result.success(finalUser)
+            Result.success(preservedUser)
         } catch (e: Exception) {
             Result.failure(mapError(e))
         }
@@ -284,92 +276,69 @@ object AuthRepository {
     fun getAccessToken(): String? = accessTokenHolder.value
     fun getRefreshToken(): String? = refreshTokenHolder
 
+    private val refreshMutex = Mutex()
+
     /**
-     * Apply avatar URL from cloud database (user_profiles) as fallback.
-     * Only overwrites if current user has NO avatar — does not replace
-     * a valid avatar from auth service with null/blank from DB.
+     * Get a valid access token, proactively refreshing if near expiry.
+     * Safe to call concurrently — Mutex serializes refresh calls.
      */
-    suspend fun applyCloudAvatarUrl(avatarUrl: String?) {
-        if (avatarUrl.isNullOrBlank()) return
-        val user = _currentUser.value ?: return
-        if (!user.photoUrl.isNullOrBlank()) return
-        val updated = user.copy(photoUrl = avatarUrl)
-        _currentUser.value = updated
-        _authState.value = AuthState.Authenticated(updated)
-        val app = com.ysxq.app.App.instance ?: return
-        try {
-            app.userPreferences().saveUserLogin(updated)
-            com.ysxq.app.data.storage.CloudBaseStorageHelper.resolveAvatarUrl(avatarUrl)?.let { resolved ->
-                app.userPreferences().saveResolvedAvatarUrl(resolved)
-            }
-        } catch (_: Exception) { }
+    suspend fun getValidAccessToken(): String? {
+        val current = accessTokenHolder.value
+        if (current != null && !isTokenExpiringSoon()) return current
+        return refreshAccessToken()
     }
 
-    suspend fun applyCloudDisplayName(displayName: String?) {
-        if (displayName.isNullOrBlank()) return
-        val user = _currentUser.value ?: return
-        if (user.displayName == displayName) return
-        val updated = user.copy(displayName = displayName)
-        _currentUser.value = updated
-        _authState.value = AuthState.Authenticated(updated)
-        val app = com.ysxq.app.App.instance ?: return
-        try {
-            app.userPreferences().saveUserLogin(updated)
-        } catch (_: Exception) { }
+    suspend fun refreshAccessToken(): String? = refreshMutex.withLock {
+        // Double-check after acquiring lock — another coroutine may have refreshed
+        val current = accessTokenHolder.value
+        if (current != null && !isTokenExpiringSoon()) return current
+        doRefresh()
     }
 
-    private val refreshLock = Any()
-
-    suspend fun refreshAccessToken(): String? {
-        synchronized(refreshLock) {
-            val currentToken = accessTokenHolder.value
-            if (currentToken != null && currentToken != _tokenBeforeRefresh) {
-                return currentToken
-            }
-        }
-        return doRefresh()
+    private fun isTokenExpiringSoon(): Boolean {
+        if (tokenExpiresAt == 0L) return true
+        return System.currentTimeMillis() >= tokenExpiresAt - 60_000L
     }
-
-    @Volatile
-    private var _tokenBeforeRefresh: String? = null
 
     private suspend fun doRefresh(): String? {
-        synchronized(refreshLock) {
-            val currentToken = accessTokenHolder.value
-            if (currentToken != null && currentToken != _tokenBeforeRefresh) {
-                return currentToken
-            }
-            _tokenBeforeRefresh = currentToken
-        }
-        try {
-            val refreshToken = refreshTokenHolder ?: return null
-            val response = api.refreshToken(
+        val refreshToken = refreshTokenHolder ?: return null
+        val response = try {
+            api.refreshToken(
                 request = CloudBaseRefreshTokenRequest(refreshToken = refreshToken)
             )
-            if (response.error != null) {
-                signOut(reason = "登录已过期，请重新登录")
-                return null
-            }
-            val newAccessToken = response.accessToken ?: return null
-            accessTokenHolder.value = newAccessToken
-            response.refreshToken?.let { refreshTokenHolder = it }
-            val app = com.ysxq.app.App.instance ?: return newAccessToken
-            val prefs = app.userPreferences()
-            prefs.saveUserLogin(
-                _currentUser.value ?: return newAccessToken,
-                newAccessToken,
-                response.refreshToken ?: refreshToken
-            )
-            return newAccessToken
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
             return null
-        } finally {
-            synchronized(refreshLock) {
-                _tokenBeforeRefresh = null
-            }
         }
+
+        if (response.error != null) {
+            if (response.error == "invalid_grant") {
+                signOut(reason = "登录已过期，请重新登录")
+            }
+            return null
+        }
+
+        val newAccessToken = response.accessToken ?: return null
+        val newRefreshToken = response.refreshToken ?: refreshToken
+        accessTokenHolder.value = newAccessToken
+        refreshTokenHolder = newRefreshToken
+
+        val expiresIn = response.expiresIn ?: 7200L
+        tokenExpiresAt = System.currentTimeMillis() + expiresIn * 1000L
+
+        val app = com.ysxq.app.App.instance
+        if (app != null) {
+            try {
+                val prefs = app.userPreferences()
+                prefs.saveUserLogin(
+                    _currentUser.value ?: return newAccessToken,
+                    newAccessToken,
+                    newRefreshToken
+                )
+            } catch (_: Exception) { }
+        }
+        return newAccessToken
     }
 
     private suspend fun handleAuthResponse(response: CloudBaseAuthResponse): Result<User> {
@@ -381,6 +350,8 @@ object AuthRepository {
 
         accessTokenHolder.value = accessToken
         refreshTokenHolder = response.refreshToken
+        val expiresIn = response.expiresIn ?: 7200L
+        tokenExpiresAt = System.currentTimeMillis() + expiresIn * 1000L
 
         val user = response.user?.toDomainUser()
         if (user != null) {

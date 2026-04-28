@@ -1,11 +1,14 @@
 package com.ysxq.app.viewmodel
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import coil3.request.ImageRequest
 import coil3.SingletonImageLoader
 import com.ysxq.app.data.*
+import com.ysxq.app.data.update.AppVersionInfo
+import com.ysxq.app.data.update.UpdateChecker
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -17,7 +20,10 @@ import kotlinx.coroutines.delay
 data class SplashState(
     val isInitialized: Boolean = false,
     val loadingMessage: String = "正在初始化...",
-    val progress: Float = 0f
+    val progress: Float = 0f,
+    val updateAvailable: AppVersionInfo? = null,
+    val isDownloading: Boolean = false,
+    val downloadProgress: Float = 0f
 )
 
 class SplashViewModel(application: Application) : AndroidViewModel(application) {
@@ -34,9 +40,24 @@ class SplashViewModel(application: Application) : AndroidViewModel(application) 
     private fun startPreload() {
         viewModelScope.launch {
             try {
+                _state.value = _state.value.copy(loadingMessage = "正在检查更新...", progress = 0.05f)
+
+                try {
+                    val updateInfo = UpdateChecker.checkForUpdate()
+                    if (updateInfo != null) {
+                        _state.value = _state.value.copy(
+                            updateAvailable = updateInfo,
+                            loadingMessage = "发现新版本 ${updateInfo.versionName}"
+                        )
+                        return@launch
+                    }
+                } catch (_: Exception) { }
+
                 _state.value = _state.value.copy(loadingMessage = "正在连接服务器...", progress = 0.1f)
 
                 if (cache.homeLoaded && cache.categories.isNotEmpty()) {
+                    cache.loadSearchIndexFromFile()
+                    cache.startBackgroundIndexIfNeeded()
                     _state.value = _state.value.copy(loadingMessage = "加载完成", progress = 1f)
                     delay(300)
                     _state.value = _state.value.copy(isInitialized = true)
@@ -92,22 +113,53 @@ class SplashViewModel(application: Application) : AndroidViewModel(application) 
                 cache.saveHomeData(movies, tvSeries, anime, variety, banners)
                 if (categories.isNotEmpty()) cache.saveCategories(categories)
 
-                // Preload category page: fetch first page for all main categories
+                // 将首页视频加入搜索索引
+                cache.addToSearchIndex(movies + tvSeries + anime + variety + banners)
+
+                // Preload category page: parallel fetch first page for all main categories
                 if (categories.isNotEmpty() && !cache.categoryViewStateSaved) {
                     try {
                         val mainCategories = categories.filter { it.pid == 0 }
-                        for (mainCat in mainCategories) {
-                            try {
-                                val subs = categories.filter { it.pid == mainCat.id }
-                                val typeId = subs.firstOrNull()?.id ?: mainCat.id
-                                val key = cache.videoListKey("detail", typeId, 1, "全部", "全部", null)
-                                if (cache.getVideoList(key) == null) {
-                                    val catVideos = api.getVideoList(ac = "detail", typeId = typeId, page = 1)
-                                    cache.saveVideoList(key, AppCache.CachedResponse(
-                                        catVideos.list, catVideos.pagecount, catVideos.total
-                                    ))
+
+                        // Parallel preload all main categories
+                        val results = kotlinx.coroutines.coroutineScope {
+                            mainCategories.map { mainCat ->
+                                async {
+                                    try {
+                                        val subs = categories.filter { it.pid == mainCat.id }
+                                        val typeId = subs.firstOrNull()?.id ?: mainCat.id
+                                        val key = cache.videoListKey("detail", typeId, 1, "全部", "全部", null)
+                                        if (cache.getVideoList(key) == null) {
+                                            val catVideos = api.getVideoList(ac = "detail", typeId = typeId, page = 1)
+                                            cache.saveVideoList(key, AppCache.CachedResponse(
+                                                catVideos.list, catVideos.pagecount, catVideos.total
+                                            ))
+                                        }
+                                        val cached = cache.getVideoList(key)
+                                        mainCat.id to (cached?.total ?: 0)
+                                    } catch (_: Exception) {
+                                        mainCat.id to -1
+                                    }
                                 }
-                            } catch (_: Exception) { continue }
+                            }.awaitAll()
+                        }
+
+                        // 将分类页视频加入搜索索引
+                        for (mainCat in categories.filter { it.pid == 0 }) {
+                            val subs = categories.filter { it.pid == mainCat.id }
+                            val typeId = subs.firstOrNull()?.id ?: mainCat.id
+                            val key = cache.videoListKey("detail", typeId, 1, "全部", "全部", null)
+                            cache.getVideoList(key)?.list?.let { cache.addToSearchIndex(it) }
+                        }
+
+                        // Filter out main categories with 0 videos
+                        val validMainIds = results
+                            .filter { (_, total) -> total != 0 }
+                            .map { (id, _) -> id }
+                            .toSet()
+                        if (validMainIds.isNotEmpty() && validMainIds.size < mainCategories.size) {
+                            val filtered = categories.filter { it.pid != 0 || it.id in validMainIds }
+                            cache.saveCategories(filtered)
                         }
                     } catch (_: Exception) { }
                 }
@@ -128,8 +180,41 @@ class SplashViewModel(application: Application) : AndroidViewModel(application) 
                 delay(500)
                 _state.value = _state.value.copy(isInitialized = true)
 
+                // 加载已有索引 + 后台全量构建
+                cache.loadSearchIndexFromFile()
+                cache.startBackgroundIndexIfNeeded()
+
             } catch (_: Exception) {
                 _state.value = _state.value.copy(isInitialized = true)
+            }
+        }
+    }
+
+    fun startUpdate(context: Context) {
+        viewModelScope.launch {
+            val info = _state.value.updateAvailable ?: return@launch
+            _state.value = _state.value.copy(
+                isDownloading = true,
+                loadingMessage = "正在下载更新...",
+                downloadProgress = 0f
+            )
+
+            val apkFile = UpdateChecker.downloadApk(context, info.apkDownloadUrl) { progress ->
+                _state.value = _state.value.copy(downloadProgress = progress)
+            }
+
+            if (apkFile != null) {
+                _state.value = _state.value.copy(
+                    isDownloading = false,
+                    loadingMessage = "正在安装...",
+                    downloadProgress = 1f
+                )
+                UpdateChecker.installApk(context, apkFile)
+            } else {
+                _state.value = _state.value.copy(
+                    isDownloading = false,
+                    loadingMessage = "下载失败，请重试"
+                )
             }
         }
     }

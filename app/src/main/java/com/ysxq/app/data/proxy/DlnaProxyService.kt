@@ -21,7 +21,7 @@ class DlnaProxyService : Service() {
         // Static references for composable access
         @Volatile
         var proxyServer: DlnaProxyServer? = null
-            private set
+            internal set
         @Volatile
         var sessionManager: ProxySessionManager? = null
             private set
@@ -43,6 +43,7 @@ class DlnaProxyService : Service() {
     }
 
     private var wifiLock: WifiManager.WifiLock? = null
+    private var multicastLock: WifiManager.MulticastLock? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -123,6 +124,9 @@ class DlnaProxyService : Service() {
             wifiLock = wifiManager?.createWifiLock(WifiManager.WIFI_MODE_FULL, "DlnaProxyWifiLock")?.apply {
                 acquire()
             }
+            multicastLock = wifiManager?.createMulticastLock("DlnaProxyMulticast")?.apply {
+                acquire()
+            }
         } catch (e: Exception) {
             // WiFi lock acquisition failed, continue without it
         }
@@ -139,5 +143,13 @@ class DlnaProxyService : Service() {
             }
         }
         wifiLock = null
+        multicastLock?.let {
+            if (it.isHeld) {
+                try {
+                    it.release()
+                } catch (_: Exception) { }
+            }
+        }
+        multicastLock = null
     }
 }

@@ -75,7 +75,7 @@ fun VideoItem.parsePlaySources(): List<VideoSource> {
         val episodes = episodesStr.split("#")
             .filter { it.isNotBlank() }
             .mapNotNull { ep ->
-                val parts = ep.split("$")
+                val parts = ep.split("$", limit = 2)
                 if (parts.size >= 2) {
                     Episode(name = parts[0], url = parts[1])
                 } else null
