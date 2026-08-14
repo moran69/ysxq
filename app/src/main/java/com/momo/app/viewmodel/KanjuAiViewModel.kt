@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import com.momo.app.data.VideoItem
 import com.momo.app.data.VideoSource
 import com.momo.app.data.kanjuai.KanjuAiApi
+import com.momo.app.data.kanjuai.KanjuAiHomeSection
+import com.momo.app.data.kanjuai.KanjuAiTrendingCard
 import com.momo.app.data.kanjuai.KanjuAiSuggestion
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -16,6 +18,9 @@ data class KanjuAiState(
     val isLoading: Boolean = false,
     val hasSearched: Boolean = false,
     val results: List<KanjuAiSuggestion> = emptyList(),
+    val homeSections: List<KanjuAiHomeSection> = emptyList(),
+    val trending: List<KanjuAiTrendingCard> = emptyList(),
+    val isHomeLoading: Boolean = false,
     val error: String? = null,
     val isDetailLoading: Boolean = false
 )
@@ -24,6 +29,28 @@ class KanjuAiViewModel : ViewModel() {
 
     private val _state = MutableStateFlow(KanjuAiState())
     val state: StateFlow<KanjuAiState> = _state.asStateFlow()
+
+    init {
+        loadHome()
+    }
+
+    /** 进入页面自动加载首页推荐+热门榜单 */
+    fun loadHome() {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(isHomeLoading = true)
+            try {
+                val sections = KanjuAiApi.homeFeed()
+                val trending = KanjuAiApi.trending()
+                _state.value = _state.value.copy(
+                    homeSections = sections,
+                    trending = trending,
+                    isHomeLoading = false
+                )
+            } catch (_: Exception) {
+                _state.value = _state.value.copy(isHomeLoading = false)
+            }
+        }
+    }
 
     fun updateQuery(query: String) {
         _state.value = _state.value.copy(query = query)
@@ -62,5 +89,13 @@ class KanjuAiViewModel : ViewModel() {
         android.util.Log.d("KanjuAiVM", "resolveDetail: ${item.label} variantId=${item.target?.variantId}")
         val variantId = item.target?.variantId ?: return null
         return KanjuAiApi.fetchVideoDetailByVariantId(variantId, item.label)
+    }
+
+    /**
+     * 点击首页推荐/热门榜单卡片 → 按 variantId 获取详情+剧集
+     */
+    suspend fun resolveDetailByVariantId(variantId: String, fallbackTitle: String): Pair<VideoItem, List<VideoSource>>? {
+        android.util.Log.d("KanjuAiVM", "resolveDetailByVariantId: variantId=$variantId title=$fallbackTitle")
+        return KanjuAiApi.fetchVideoDetailByVariantId(variantId, fallbackTitle)
     }
 }

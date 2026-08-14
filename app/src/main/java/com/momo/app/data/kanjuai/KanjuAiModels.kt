@@ -168,3 +168,66 @@ data class KanjuAiUser(
     @SerialName("display_name") val displayName: String = "",
     val status: String = ""
 )
+
+
+// ===== 首页推荐 (/v1/feed/home) =====
+
+@Serializable
+data class KanjuAiHomeFeedResponse(
+    val `object`: String = "",
+    val sections: List<KanjuAiHomeSection> = emptyList(),
+    @SerialName("next_cursor") val nextCursor: String? = null
+)
+
+@Serializable
+data class KanjuAiHomeSection(
+    val id: String = "",
+    val title: String = "",
+    val cards: List<KanjuAiHomeCard> = emptyList()
+)
+
+@Serializable
+data class KanjuAiHomeCard(
+    val id: String = "",
+    @SerialName("variantId") val variantId: String = "",
+    val title: String = "",
+    @SerialName("posterUrl") val posterUrl: String = "",
+    val year: Int = 0,
+    val remarks: String = "",
+    @SerialName("content_kind") val contentKind: String = "",
+    @SerialName("heat_value") val heatValue: Double = 0.0,
+    @SerialName("rank_position") val rankPosition: Int = 0
+)
+
+// ===== 热门榜单 (/v1/browse/catalog?sort=trending) =====
+
+@Serializable
+data class KanjuAiTrendingResponse(
+    val `object`: String = "",
+    val cards: List<KanjuAiTrendingCard> = emptyList(),
+    val pagination: KanjuAiTrendingPagination? = null
+)
+
+@Serializable
+data class KanjuAiTrendingCard(
+    val id: String = "",
+    @SerialName("variant_id") val variantId: String = "",
+    val title: String = "",
+    @SerialName("poster_url") val posterUrl: String = "",
+    val year: Int = 0,
+    val area: String = "",
+    val remarks: String = "",
+    @SerialName("content_kind") val contentKind: String = "",
+    val genres: List<String> = emptyList(),
+    val actors: List<String> = emptyList(),
+    @SerialName("heat_value") val heatValue: Double = 0.0,
+    @SerialName("rank_position") val rankPosition: Int = 0
+)
+
+@Serializable
+data class KanjuAiTrendingPagination(
+    val page: Int = 0,
+    val limit: Int = 0,
+    @SerialName("total_count") val totalCount: Int = 0,
+    @SerialName("has_more") val hasMore: Boolean = false
+)

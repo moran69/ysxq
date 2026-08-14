@@ -3,9 +3,9 @@ package com.momo.app.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -26,6 +26,14 @@ import android.widget.Toast
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.momo.app.data.VideoItem
 import com.momo.app.data.kanjuai.KanjuAiSuggestion
+import com.momo.app.data.kanjuai.KanjuAiHomeSection
+import com.momo.app.data.kanjuai.KanjuAiHomeCard
+import com.momo.app.data.kanjuai.KanjuAiTrendingCard
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import com.momo.app.ui.components.*
 import com.momo.app.ui.theme.*
 import com.momo.app.viewmodel.KanjuAiViewModel
@@ -158,27 +166,22 @@ fun KanjuAiScreen(
                 }
             }
             else -> {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(48.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Icon(Icons.Filled.Search, null, tint = TextTertiary, modifier = Modifier.size(48.dp))
-                    Text(
-                        text = "搜索看剧AI片源",
-                        color = TextTertiary,
-                        fontSize = 14.sp,
-                        modifier = Modifier.padding(top = 12.dp)
-                    )
-                    Text(
-                        text = "聚合看剧AI片源，个人自用",
-                        color = TextTertiary.copy(alpha = 0.7f),
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                }
+                KanjuAiHomeContent(
+                    state = state,
+                    trending = state.trending,
+                    onCardClick = { card ->
+                        scope.launch {
+                            detailLoadingId = card.id
+                            val detail = viewModel.resolveDetailByVariantId(card.variantId, card.title)
+                            detailLoadingId = null
+                            if (detail != null) {
+                                onVideoClick(detail.first, detail.second)
+                            } else {
+                                Toast.makeText(context, "该片源暂无可用播放源", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                )
             }
         }
     }
@@ -271,5 +274,270 @@ private fun KanjuAiGridItem(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+    }
+}
+
+
+@Composable
+private fun KanjuAiHomeContent(
+    state: com.momo.app.viewmodel.KanjuAiState,
+    trending: List<KanjuAiTrendingCard>,
+    onCardClick: (KanjuAiHomeCard) -> Unit
+) {
+    if (state.isHomeLoading && state.homeSections.isEmpty() && trending.isEmpty()) {
+        LoadingIndicator(modifier = Modifier.fillMaxSize().padding(top = 80.dp))
+        return
+    }
+
+    val scrollState = rememberScrollState()
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(scrollState)
+            .padding(bottom = 24.dp)
+    ) {
+        // 首页推荐 sections
+        state.homeSections.forEach { section ->
+            KanjuAiHomeSection(
+                section = section,
+                onCardClick = onCardClick
+            )
+        }
+
+        // 热门榜单
+        if (trending.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "热门榜单",
+                color = TextPrimary,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(start = 16.dp, bottom = 8.dp)
+            )
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(trending) { card ->
+                    KanjuAiTrendingItem(
+                        card = card,
+                        onClick = {
+                            onCardClick(KanjuAiHomeCard(
+                                id = card.id,
+                                variantId = card.variantId,
+                                title = card.title,
+                                posterUrl = card.posterUrl,
+                                year = card.year,
+                                remarks = card.remarks
+                            ))
+                        }
+                    )
+                }
+            }
+        }
+
+        if (state.homeSections.isEmpty() && trending.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(48.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Filled.Search, null, tint = TextTertiary, modifier = Modifier.size(48.dp))
+                    Text(
+                        text = "搜索看剧AI片源",
+                        color = TextTertiary,
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(top = 12.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun KanjuAiHomeSection(
+    section: KanjuAiHomeSection,
+    onCardClick: (KanjuAiHomeCard) -> Unit
+) {
+    Column(modifier = Modifier.padding(bottom = 8.dp)) {
+        Text(
+            text = section.title,
+            color = TextPrimary,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 8.dp)
+        )
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            items(section.cards) { card ->
+                KanjuAiHomeCardItem(card = card, onClick = { onCardClick(card) })
+            }
+        }
+    }
+}
+
+@Composable
+private fun KanjuAiHomeCardItem(
+    card: KanjuAiHomeCard,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .width(100.dp)
+            .clickable(onClick = onClick)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(2f / 3f)
+                .background(DarkSurfaceVariant, RoundedCornerShape(8.dp))
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                shape = RoundedCornerShape(8.dp),
+                color = DarkSurfaceVariant
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = card.title.take(2),
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextTertiary.copy(alpha = 0.5f)
+                    )
+                }
+            }
+
+            if (card.remarks.isNotBlank()) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(4.dp),
+                    shape = RoundedCornerShape(4.dp),
+                    color = SakuraPrimary.copy(alpha = 0.85f)
+                ) {
+                    Text(
+                        text = card.remarks,
+                        fontSize = 9.sp,
+                        color = DarkBackground,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = card.title,
+            fontSize = 11.sp,
+            color = TextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+
+        if (card.year > 0) {
+            Text(
+                text = card.year.toString(),
+                fontSize = 9.sp,
+                color = TextTertiary
+            )
+        }
+    }
+}
+
+@Composable
+private fun KanjuAiTrendingItem(
+    card: KanjuAiTrendingCard,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .width(100.dp)
+            .clickable(onClick = onClick)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(2f / 3f)
+                .background(DarkSurfaceVariant, RoundedCornerShape(8.dp))
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                shape = RoundedCornerShape(8.dp),
+                color = DarkSurfaceVariant
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = card.title.take(2),
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextTertiary.copy(alpha = 0.5f)
+                    )
+                }
+            }
+
+            // 排名角标
+            if (card.rankPosition > 0) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(4.dp),
+                    shape = RoundedCornerShape(4.dp),
+                    color = SakuraPrimary
+                ) {
+                    Text(
+                        text = "No.${card.rankPosition}",
+                        fontSize = 9.sp,
+                        color = DarkBackground,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            if (card.remarks.isNotBlank()) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(4.dp),
+                    shape = RoundedCornerShape(4.dp),
+                    color = SakuraPrimary.copy(alpha = 0.85f)
+                ) {
+                    Text(
+                        text = card.remarks,
+                        fontSize = 9.sp,
+                        color = DarkBackground,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = card.title,
+            fontSize = 11.sp,
+            color = TextPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+
+        if (card.genres.isNotEmpty()) {
+            Text(
+                text = card.genres.take(2).joinToString("/"),
+                fontSize = 9.sp,
+                color = TextTertiary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }

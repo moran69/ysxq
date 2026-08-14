@@ -136,6 +136,35 @@ object KanjuAiApi {
         }
     }
 
+
+    // ===== 0. 首页推荐 (/v1/feed/home) =====
+    suspend fun homeFeed(): List<KanjuAiHomeSection> = withContext(Dispatchers.IO) {
+        ensureSession()
+        try {
+            val search = "?scope=public&mode=preview&sections=3&cards=10&adult_confirmed=false"
+            val respBody = execSignedRequest("GET", "/v1/feed/home", search)
+            val resp = json.decodeFromString(KanjuAiHomeFeedResponse.serializer(), respBody)
+            resp.sections.filter { it.cards.isNotEmpty() }
+        } catch (e: Exception) {
+            android.util.Log.e("KanjuAiApi", "homeFeed failed", e)
+            emptyList()
+        }
+    }
+
+    // ===== 0b. 热门榜单 (/v1/browse/catalog?sort=trending) =====
+    suspend fun trending(window: String = "day", limit: Int = 20): List<KanjuAiTrendingCard> = withContext(Dispatchers.IO) {
+        ensureSession()
+        try {
+            val search = "?sort=trending&window=$window&page=1&limit=$limit"
+            val respBody = execSignedRequest("GET", "/v1/browse/catalog", search)
+            val resp = json.decodeFromString(KanjuAiTrendingResponse.serializer(), respBody)
+            resp.cards
+        } catch (e: Exception) {
+            android.util.Log.e("KanjuAiApi", "trending failed", e)
+            emptyList()
+        }
+    }
+
     // ===== 2. 搜索 =====
     suspend fun search(keyword: String): List<KanjuAiSuggestion> = withContext(Dispatchers.IO) {
         ensureSession()
