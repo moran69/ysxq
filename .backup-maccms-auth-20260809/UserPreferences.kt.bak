@@ -1,0 +1,216 @@
+package com.momo.app.data.local
+
+import android.content.Context
+import android.net.Uri
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import com.momo.app.data.auth.User
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
+
+/**
+ * 用户偏好存储，基于 DataStore Preferences
+ * 持久化登录状态、用户信息、游客标记
+ */
+class UserPreferences(private val dataStore: DataStore<Preferences>) {
+
+    companion object {
+        private val KEY_IS_LOGGED_IN = booleanPreferencesKey("is_logged_in")
+        private val KEY_IS_GUEST = booleanPreferencesKey("is_guest")
+        private val KEY_USER_UID = stringPreferencesKey("user_uid")
+        private val KEY_USER_EMAIL = stringPreferencesKey("user_email")
+        private val KEY_USER_PHONE = stringPreferencesKey("user_phone")
+        private val KEY_USER_NICKNAME = stringPreferencesKey("user_nickname")
+        private val KEY_USER_AVATAR_URL = stringPreferencesKey("user_avatar_url")
+        private val KEY_USER_EMAIL_VERIFIED = booleanPreferencesKey("user_email_verified")
+        private val KEY_ACCESS_TOKEN = stringPreferencesKey("access_token")
+        private val KEY_REFRESH_TOKEN = stringPreferencesKey("refresh_token")
+        private val KEY_LOCAL_AVATAR_URI = stringPreferencesKey("local_avatar_uri")
+        private val KEY_RESOLVED_AVATAR_URL = stringPreferencesKey("resolved_avatar_url")
+        private val KEY_PLAYBACK_SPEED = floatPreferencesKey("playback_speed")
+        // 用户名密码本地登录
+        private val KEY_USER_USERNAME = stringPreferencesKey("user_username")
+        private val KEY_USER_PASSWORD = stringPreferencesKey("user_password")
+        private val KEY_USER_IS_VIP = booleanPreferencesKey("user_is_vip")
+        private val KEY_REGISTERED_USERS = stringPreferencesKey("registered_users")
+    }
+
+    val isLoggedIn: Flow<Boolean> = dataStore.data.map { it[KEY_IS_LOGGED_IN] ?: false }
+
+    val isGuest: Flow<Boolean> = dataStore.data.map { it[KEY_IS_GUEST] ?: false }
+
+    val userInfo: Flow<User?> = dataStore.data.map { prefs ->
+        val uid = prefs[KEY_USER_UID]
+        if (uid != null) {
+            User(
+                uid = uid,
+                email = prefs[KEY_USER_EMAIL] ?: "",
+                phone = prefs[KEY_USER_PHONE] ?: "",
+                displayName = prefs[KEY_USER_NICKNAME] ?: "",
+                photoUrl = prefs[KEY_USER_AVATAR_URL],
+                isEmailVerified = prefs[KEY_USER_EMAIL_VERIFIED] ?: false,
+                isVip = prefs[KEY_USER_IS_VIP] ?: true,
+                vipExpireTime = Long.MAX_VALUE
+            )
+        } else null
+    }
+
+    val accessToken: Flow<String?> = dataStore.data.map { it[KEY_ACCESS_TOKEN] }
+
+    val refreshToken: Flow<String?> = dataStore.data.map { it[KEY_REFRESH_TOKEN] }
+
+    val localAvatarUri: Flow<Uri?> = dataStore.data.map { prefs ->
+        prefs[KEY_LOCAL_AVATAR_URI]?.let { Uri.parse(it) }
+    }
+
+    val resolvedAvatarUrl: Flow<String?> = dataStore.data.map { prefs ->
+        prefs[KEY_RESOLVED_AVATAR_URL]
+    }
+
+    suspend fun saveUserLogin(user: User, accessToken: String? = null, refreshToken: String? = null) {
+        dataStore.edit { prefs ->
+            prefs[KEY_IS_LOGGED_IN] = true
+            prefs[KEY_IS_GUEST] = false
+            prefs[KEY_USER_UID] = user.uid
+            prefs[KEY_USER_EMAIL] = user.email
+            prefs[KEY_USER_PHONE] = user.phone
+            prefs[KEY_USER_NICKNAME] = user.displayName
+            prefs[KEY_USER_IS_VIP] = user.isVip
+            if (user.photoUrl != null) {
+                prefs[KEY_USER_AVATAR_URL] = user.photoUrl
+            } else {
+                prefs.remove(KEY_USER_AVATAR_URL)
+            }
+            prefs[KEY_USER_EMAIL_VERIFIED] = user.isEmailVerified
+            accessToken?.let { prefs[KEY_ACCESS_TOKEN] = it }
+            refreshToken?.let { prefs[KEY_REFRESH_TOKEN] = it }
+        }
+    }
+
+    // ====== 本地用户名密码注册/登录 ======
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    @Serializable
+    private data class RegisteredUser(val username: String, val password: String)
+
+    suspend fun registerLocalUser(username: String, password: String): Result<User> {
+        if (username.length < 2) return Result.failure(Exception("用户名至少2个字符"))
+        if (password.length < 4) return Result.failure(Exception("密码至少4个字符"))
+
+        val users = getRegisteredUsers()
+        if (users.any { it.username == username }) {
+            return Result.failure(Exception("用户名已存在"))
+        }
+
+        val newUsers = users + RegisteredUser(username, password)
+        saveRegisteredUsers(newUsers)
+
+        val user = User(
+            uid = "local_$username",
+            displayName = username,
+            isVip = true,
+            vipExpireTime = Long.MAX_VALUE
+        )
+        saveUserLogin(user)
+        saveLocalCredentials(username, password)
+        return Result.success(user)
+    }
+
+    suspend fun loginLocalUser(username: String, password: String): Result<User> {
+        val users = getRegisteredUsers()
+        val match = users.find { it.username == username }
+        if (match == null) return Result.failure(Exception("用户不存在"))
+        if (match.password != password) return Result.failure(Exception("密码错误"))
+
+        val user = User(
+            uid = "local_$username",
+            displayName = username,
+            isVip = true,
+            vipExpireTime = Long.MAX_VALUE
+        )
+        saveUserLogin(user)
+        saveLocalCredentials(username, password)
+        return Result.success(user)
+    }
+
+    private suspend fun getRegisteredUsers(): List<RegisteredUser> {
+        val raw = dataStore.data.map { it[KEY_REGISTERED_USERS] }.first() ?: return emptyList()
+        return try {
+            json.decodeFromString<List<RegisteredUser>>(raw)
+        } catch (_: Exception) { emptyList() }
+    }
+
+    private suspend fun saveRegisteredUsers(users: List<RegisteredUser>) {
+        dataStore.edit { it[KEY_REGISTERED_USERS] = json.encodeToString(ListSerializer(RegisteredUser.serializer()), users) }
+    }
+
+    private suspend fun saveLocalCredentials(username: String, password: String) {
+        dataStore.edit {
+            it[KEY_USER_USERNAME] = username
+            it[KEY_USER_PASSWORD] = password
+        }
+    }
+
+    suspend fun markAsGuest() {
+        dataStore.edit { prefs ->
+            prefs[KEY_IS_GUEST] = true
+            prefs[KEY_IS_LOGGED_IN] = false
+        }
+    }
+
+    suspend fun clearAll() {
+        dataStore.edit { it.clear() }
+    }
+
+    suspend fun saveLocalAvatarUri(uri: Uri) {
+        dataStore.edit { prefs ->
+            prefs[KEY_LOCAL_AVATAR_URI] = uri.toString()
+        }
+    }
+
+    suspend fun clearLocalAvatarUri() {
+        dataStore.edit { prefs ->
+            prefs.remove(KEY_LOCAL_AVATAR_URI)
+        }
+    }
+
+    suspend fun saveResolvedAvatarUrl(url: String?) {
+        dataStore.edit { prefs ->
+            if (url != null) {
+                prefs[KEY_RESOLVED_AVATAR_URL] = url
+            } else {
+                prefs.remove(KEY_RESOLVED_AVATAR_URL)
+            }
+        }
+    }
+
+    val playbackSpeed: Flow<Float> = dataStore.data.map { it[KEY_PLAYBACK_SPEED] ?: 1.0f }
+
+    suspend fun savePlaybackSpeed(speed: Float) {
+        dataStore.edit { prefs ->
+            prefs[KEY_PLAYBACK_SPEED] = speed
+        }
+    }
+}
+
+/**
+ * DataStore 单例，跟随 Application 生命周期
+ */
+private val Context.userDataStore by preferencesDataStore(name = "user_prefs")
+
+/**
+ * 获取 UserPreferences 实例
+ */
+fun Context.userPreferences(): UserPreferences {
+    return UserPreferences(userDataStore)
+}

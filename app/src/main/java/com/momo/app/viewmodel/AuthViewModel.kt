@@ -1,0 +1,101 @@
+package com.momo.app.viewmodel
+
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.momo.app.data.auth.AuthRepository
+import com.momo.app.data.auth.AuthState
+import com.momo.app.data.auth.UiState
+import com.momo.app.data.auth.User
+import com.momo.app.data.local.userPreferences
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+
+data class AuthUiState(
+    val username: String = "",
+    val password: String = "",
+    val usernameError: String? = null,
+    val passwordError: String? = null,
+)
+
+class AuthViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val prefs by lazy { application.userPreferences() }
+
+    val authState: StateFlow<AuthState> = AuthRepository.authStateChanges()
+        .let { MutableStateFlow(AuthState.Unauthenticated) }
+
+    private val _uiState = MutableStateFlow(AuthUiState())
+    val uiState: StateFlow<AuthUiState> = _uiState.asStateFlow()
+
+    private val _authResultState = MutableStateFlow<UiState<User>>(UiState.Idle)
+    val authResultState: StateFlow<UiState<User>> = _authResultState.asStateFlow()
+
+    fun onUsernameChange(username: String) {
+        _uiState.value = _uiState.value.copy(username = username, usernameError = null)
+    }
+
+    fun onPasswordChange(password: String) {
+        _uiState.value = _uiState.value.copy(password = password, passwordError = null)
+    }
+
+    fun login() {
+        val state = _uiState.value
+        if (!validateInput(state)) return
+
+        viewModelScope.launch {
+            _authResultState.value = UiState.Loading
+            val result = AuthRepository.signInWithPassword(state.username, state.password)
+            result.onSuccess { user ->
+                _authResultState.value = UiState.Success(user)
+            }.onFailure {
+                _authResultState.value = UiState.Error(it.message ?: "登录失败")
+            }
+        }
+    }
+
+    fun register() {
+        val state = _uiState.value
+        if (!validateInput(state)) return
+
+        viewModelScope.launch {
+            _authResultState.value = UiState.Loading
+            val result = AuthRepository.register(state.username, state.password)
+            result.onSuccess { user ->
+                _authResultState.value = UiState.Success(user)
+            }.onFailure {
+                _authResultState.value = UiState.Error(it.message ?: "注册失败")
+            }
+        }
+    }
+
+    fun skipLogin() {
+        viewModelScope.launch { prefs.markAsGuest() }
+    }
+
+    private fun validateInput(state: AuthUiState): Boolean {
+        var valid = true
+        if (state.username.isBlank()) {
+            _uiState.value = _uiState.value.copy(usernameError = "请输入用户名")
+            valid = false
+        } else if (state.username.length < 2) {
+            _uiState.value = _uiState.value.copy(usernameError = "用户名至少2个字符")
+            valid = false
+        }
+        if (state.password.isBlank()) {
+            _uiState.value = _uiState.value.copy(passwordError = "请输入密码")
+            valid = false
+        } else if (state.password.length < 4) {
+            _uiState.value = _uiState.value.copy(passwordError = "密码至少4个字符")
+            valid = false
+        }
+        return valid
+    }
+
+    fun clearStates() {
+        _authResultState.value = UiState.Idle
+        _uiState.value = AuthUiState()
+    }
+}

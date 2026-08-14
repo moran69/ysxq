@@ -1,0 +1,112 @@
+package com.momo.app
+
+import android.app.Application
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
+import coil3.ImageLoader
+import coil3.PlatformContext
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
+import coil3.request.CachePolicy
+import com.yinnho.upnpcast.DLNACast
+import com.momo.app.data.AppCache
+import com.momo.app.data.auth.AuthRepository
+import com.momo.app.data.download.DownloadManager
+import com.momo.app.data.download.downloadStore
+import com.momo.app.data.local.favoritesStore
+import com.momo.app.data.local.userPreferences
+import com.momo.app.data.local.watchHistoryStore
+import com.momo.app.data.sync.FavoritesSyncRepository
+
+import com.momo.app.data.sync.WatchHistorySyncRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import okhttp3.OkHttpClient
+
+class App : Application() {
+
+    companion object {
+        var instance: Application? = null
+            private set
+
+        fun getImageLoader(context: PlatformContext): ImageLoader {
+            return ImageLoader.Builder(context)
+                .components {
+                    add(
+                        OkHttpNetworkFetcherFactory(
+                            OkHttpClient.Builder()
+                                .addInterceptor { chain ->
+                                    val request = chain.request().newBuilder()
+                                        .addHeader("Referer", "http://161.118.252.183:8899/")
+                                        .addHeader("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
+                                        .build()
+                                    chain.proceed(request)
+                                }
+                                .followRedirects(true)
+                                .followSslRedirects(true)
+                                .build()
+                        )
+                    )
+                }
+                .diskCachePolicy(CachePolicy.ENABLED)
+                .memoryCachePolicy(CachePolicy.ENABLED)
+                .build()
+        }
+    }
+
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
+        DLNACast.init(this)
+        AppCache.init(this)
+        DownloadManager.init(this, this.downloadStore())
+        restoreSession()
+
+        ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
+            override fun onStart(owner: LifecycleOwner) {
+                appScope.launch {
+                    AuthRepository.getValidAccessToken()
+                }
+            }
+        })
+    }
+
+    private fun restoreSession() {
+        appScope.launch {
+            val prefs = userPreferences()
+            val user = prefs.userInfo.first()
+            val isLoggedIn = prefs.isLoggedIn.first()
+            val isGuest = prefs.isGuest.first()
+            if (user != null && (isLoggedIn || isGuest.not())) {
+                // 本地登录用户直接恢复会话
+                if (user.uid.startsWith("local_")) {
+                    AuthRepository.restoreSession(user, "local_token", "local_refresh")
+                } else {
+                    val accessToken = prefs.accessToken.first()
+                    if (accessToken != null) {
+                        val refreshToken = prefs.refreshToken.first()
+                        AuthRepository.restoreSession(user, accessToken, refreshToken)
+                        val result = AuthRepository.reloadUser()
+                        if (result.isFailure) {
+                            val refreshed = AuthRepository.refreshAccessToken()
+                            if (refreshed != null) {
+                                AuthRepository.reloadUser()
+                            }
+                        }
+                    }
+                }
+
+                // 尝试云端同步（失败不影响用户使用）
+                try {
+                    FavoritesSyncRepository(favoritesStore()).pullFromCloud()
+                    WatchHistorySyncRepository(watchHistoryStore()).pullFromCloud()
+                } catch (_: Exception) { }
+            }
+        }
+    }
+}

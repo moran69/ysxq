@@ -1,0 +1,282 @@
+package com.momo.app.data.sync
+
+import android.util.Log
+import com.momo.app.data.NetworkModule
+import com.momo.app.data.auth.AuthRepository
+import com.momo.app.data.database.*
+import com.momo.app.data.local.FavoriteItem
+import com.momo.app.data.local.FavoritesStore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.*
+
+class FavoritesSyncRepository(
+    private val favoritesStore: FavoritesStore
+) {
+    private val api = NetworkModule.cloudBaseDatabaseService
+    private val syncMutex = Mutex()
+
+    companion object {
+        private const val TAG = "FavoritesSync"
+        private const val MODEL_NAME = "favorites"
+        private val AUTH_ERROR_KEYWORDS = listOf("unauthenticated", "unauthorized", "token", "invalid_token", "access_denied", "login", "id_token_expired", "permission", "auth failure")
+    }
+
+    private fun isAuthError(errorMsg: String?): Boolean {
+        if (errorMsg.isNullOrBlank()) return false
+        val lower = errorMsg.lowercase()
+        return AUTH_ERROR_KEYWORDS.any { lower.contains(it) }
+    }
+
+    private suspend fun refreshAndGetToken(): String? {
+        return AuthRepository.getValidAccessToken()
+    }
+
+    suspend fun upsertToCloud(item: FavoriteItem) {
+        syncMutex.withLock {
+            upsertToCloudInternal(item)
+        }
+    }
+
+    private suspend fun upsertToCloudInternal(item: FavoriteItem) {
+        withContext(Dispatchers.IO) {
+            var token = AuthRepository.getValidAccessToken() ?: return@withContext
+            val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
+            try {
+                val existingRecord = findExistingRecord(token, uid, item.id)
+
+                if (existingRecord != null) {
+                    val recordId = existingRecord["_id"]?.jsonPrimitive?.contentOrNull
+                    if (recordId != null) {
+                        val updateData = buildJsonObject {
+                            put("name", item.name)
+                            put("pic", item.pic)
+                            put("typeName", item.typeName)
+                            put("remarks", item.remarks)
+                            put("year", item.year)
+                            put("area", item.area)
+                            put("addedAt", item.addedAt)
+                        }
+                        var response = api.updateByFilter(
+                            "Bearer $token",
+                            MODEL_NAME,
+                            CloudBaseDbUpdateByFilterRequest(
+                                filter = CloudBaseDbFilter(
+                                    where = mapOf("_id" to buildJsonObject { put("\$eq", recordId) })
+                                ),
+                                data = updateData
+                            )
+                        )
+                        var errMsg = response.getErrorMessage()
+                        if (isAuthError(errMsg)) {
+                            token = refreshAndGetToken() ?: return@withContext
+                            response = api.updateByFilter(
+                                "Bearer $token",
+                                MODEL_NAME,
+                                CloudBaseDbUpdateByFilterRequest(
+                                    filter = CloudBaseDbFilter(
+                                        where = mapOf("_id" to buildJsonObject { put("\$eq", recordId) })
+                                    ),
+                                    data = updateData
+                                )
+                            )
+                            errMsg = response.getErrorMessage()
+                        }
+                        if (errMsg != null) {
+                            Log.e(TAG, "云端更新收藏失败: $errMsg")
+                        }
+                    }
+                } else {
+                    val fields = buildJsonObject {
+                        put("uid", uid)
+                        put("id", item.id)
+                        put("name", item.name)
+                        put("pic", item.pic)
+                        put("typeName", item.typeName)
+                        put("remarks", item.remarks)
+                        put("year", item.year)
+                        put("area", item.area)
+                        put("addedAt", item.addedAt)
+                    }
+                    val createBody = buildJsonObject { put("data", fields) }
+                    var response = api.create("Bearer $token", MODEL_NAME, createBody)
+                    var errMsg = response.getErrorMessage()
+                    if (isAuthError(errMsg)) {
+                        token = refreshAndGetToken() ?: return@withContext
+                        response = api.create("Bearer $token", MODEL_NAME, createBody)
+                        errMsg = response.getErrorMessage()
+                    }
+                    if (errMsg != null) {
+                        Log.e(TAG, "云端同步收藏失败: $errMsg")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "云端同步收藏失败: ${e.message}")
+            }
+        }
+    }
+
+    private suspend fun findExistingRecord(token: String, uid: String, videoId: Int): JsonObject? {
+        return try {
+            val response = api.list(
+                "Bearer $token",
+                MODEL_NAME,
+                CloudBaseDbListRequest(
+                    filter = CloudBaseDbFilter(
+                        where = mapOf(
+                            "uid" to buildJsonObject { put("\$eq", uid) },
+                            "id" to buildJsonObject { put("\$eq", videoId) }
+                        )
+                    ),
+                    pageSize = 1,
+                    pageNumber = 1,
+                    getCount = false
+                )
+            )
+            val records = response.data?.records ?: return null
+            records.firstOrNull()
+        } catch (e: Exception) {
+            Log.w(TAG, "查询云端收藏失败: ${e.message}")
+            null
+        }
+    }
+
+    suspend fun deleteFromCloud(videoId: Int) {
+        syncMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val token = AuthRepository.getValidAccessToken() ?: return@withContext
+                val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
+                try {
+                    val filter = CloudBaseDbDeleteByFilterRequest(
+                        filter = CloudBaseDbFilter(
+                            where = mapOf(
+                                "uid" to buildJsonObject { put("\$eq", uid) },
+                                "id" to buildJsonObject { put("\$eq", videoId) }
+                            )
+                        )
+                    )
+                    val response = api.deleteByFilter("Bearer $token", MODEL_NAME, filter)
+                    val errMsg = response.getErrorMessage()
+                    if (errMsg != null) {
+                        Log.e(TAG, "云端删除收藏失败: $errMsg")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "云端删除收藏失败: ${e.message}")
+                }
+            }
+        }
+    }
+
+    suspend fun clearCloud() {
+        syncMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val token = AuthRepository.getValidAccessToken() ?: return@withContext
+                val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() } ?: return@withContext
+                try {
+                    val filter = CloudBaseDbDeleteByFilterRequest(
+                        filter = CloudBaseDbFilter(
+                            where = mapOf("uid" to buildJsonObject { put("\$eq", uid) })
+                        )
+                    )
+                    val response = api.deleteByFilter("Bearer $token", MODEL_NAME, filter)
+                    val errMsg = response.getErrorMessage()
+                    if (errMsg != null) {
+                        Log.e(TAG, "云端清空收藏失败: $errMsg")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "云端清空收藏失败: ${e.message}")
+                }
+            }
+        }
+    }
+
+    suspend fun pullFromCloud(): Result<Boolean> {
+        return syncMutex.withLock {
+            withContext(Dispatchers.IO) {
+                var token = AuthRepository.getValidAccessToken()
+                if (token == null) {
+                    return@withContext Result.success(false)
+                }
+                val uid = AuthRepository.currentUser?.uid?.takeIf { it.isNotBlank() }
+                if (uid == null) {
+                    return@withContext Result.success(false)
+                }
+                try {
+                    var response = api.list(
+                        "Bearer $token",
+                        MODEL_NAME,
+                        CloudBaseDbListRequest(
+                            filter = CloudBaseDbFilter(
+                                where = mapOf("uid" to buildJsonObject { put("\$eq", uid) })
+                            ),
+                            orderBy = listOf(buildJsonObject { put("addedAt", "desc") }),
+                            pageSize = 200,
+                            pageNumber = 1,
+                            getCount = false
+                        )
+                    )
+                    var listErr = response.getErrorMessage()
+                    if (isAuthError(listErr)) {
+                        token = refreshAndGetToken() ?: return@withContext Result.failure(Exception("登录已过期，请重新登录"))
+                        response = api.list(
+                            "Bearer $token",
+                            MODEL_NAME,
+                            CloudBaseDbListRequest(
+                                filter = CloudBaseDbFilter(
+                                    where = mapOf("uid" to buildJsonObject { put("\$eq", uid) })
+                                ),
+                                orderBy = listOf(buildJsonObject { put("addedAt", "desc") }),
+                                pageSize = 200,
+                                pageNumber = 1,
+                                getCount = false
+                            )
+                        )
+                        listErr = response.getErrorMessage()
+                    }
+                    if (listErr != null) {
+                        Log.e(TAG, "从云端拉取收藏失败: $listErr")
+                        return@withContext Result.failure(Exception(listErr))
+                    }
+                    val records = response.data?.records ?: return@withContext Result.success(true)
+                    val cloudItems = records.mapNotNull { obj ->
+                        try {
+                            FavoriteItem(
+                                id = obj["id"]?.jsonPrimitive?.intOrNull ?: return@mapNotNull null,
+                                name = obj["name"]?.jsonPrimitive?.contentOrNull ?: "",
+                                pic = obj["pic"]?.jsonPrimitive?.contentOrNull ?: "",
+                                typeName = obj["typeName"]?.jsonPrimitive?.contentOrNull ?: "",
+                                remarks = obj["remarks"]?.jsonPrimitive?.contentOrNull ?: "",
+                                year = obj["year"]?.jsonPrimitive?.contentOrNull ?: "",
+                                area = obj["area"]?.jsonPrimitive?.contentOrNull ?: "",
+                                addedAt = obj["addedAt"]?.jsonPrimitive?.longOrNull ?: System.currentTimeMillis()
+                            )
+                        } catch (_: Exception) { null }
+                    }
+
+                    val localItems = favoritesStore.favorites.first()
+                    val localIds = localItems.map { it.id }.toSet()
+                    val newFromCloud = cloudItems.filter { it.id !in localIds }
+
+                    val cloudIds = cloudItems.map { it.id }.toSet()
+                    val localOnly = localItems.filter { it.id !in cloudIds }
+
+                    if (newFromCloud.isNotEmpty()) {
+                        val merged = (localItems + newFromCloud).sortedByDescending { it.addedAt }
+                        favoritesStore.replaceAll(merged)
+                    }
+
+                    for (localItem in localOnly) {
+                        upsertToCloudInternal(localItem)
+                    }
+                    Result.success(true)
+                } catch (e: Exception) {
+                    Log.w(TAG, "从云端拉取收藏失败: ${e.message}")
+                    Result.failure(e)
+                }
+            }
+        }
+    }
+}

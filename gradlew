@@ -22,8 +22,11 @@ cd "$SAVED" >/dev/null
 APP_NAME="Gradle"
 APP_BASE_NAME=`basename "$0"`
 
-# Use Android Studio JBR
-JAVACMD="/opt/android-studio/jbr/bin/java"
+# Use system Java (set JAVA_HOME externally)
+JAVACMD="${JAVA_HOME:+$JAVA_HOME/bin/}java"
+if [ -z "$JAVA_HOME" ] || [ ! -x "$JAVACMD" ]; then
+    JAVACMD="$(command -v java)"
+fi
 
 CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
 exec "$JAVACMD" \

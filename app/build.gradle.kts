@@ -14,7 +14,7 @@ if (keystorePropertiesFile.exists()) {
 }
 
 android {
-    namespace = "com.ysxq.app"
+    namespace = "com.momo.app"
     compileSdk = 36
 
     signingConfigs {
@@ -27,11 +27,11 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.ysxq.app"
+        applicationId = "com.momo.app"
         minSdk = 24
         targetSdk = 36
-        versionCode = 27
-        versionName = "1.4.10"
+        versionCode = 15600
+        versionName = "156"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -104,11 +104,11 @@ dependencies {
     implementation("io.coil-kt.coil3:coil-compose:3.0.4")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.0.4")
 
-    // Media3 ExoPlayer
-    implementation("androidx.media3:media3-exoplayer:1.5.1")
-    implementation("androidx.media3:media3-exoplayer-hls:1.5.1")
-    implementation("androidx.media3:media3-ui:1.5.1")
-    implementation("androidx.media3:media3-datasource-okhttp:1.5.1")
+    // Media3 ExoPlayer (upgraded to 1.6.1: 60% less buffer to start, decoder pre-warming, CMCData)
+    implementation("androidx.media3:media3-exoplayer:1.6.1")
+    implementation("androidx.media3:media3-exoplayer-hls:1.6.1")
+    implementation("androidx.media3:media3-ui:1.6.1")
+    implementation("androidx.media3:media3-datasource-okhttp:1.6.1")
 
     // DataStore for preferences
     implementation("androidx.datastore:datastore-preferences:1.1.1")

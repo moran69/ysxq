@@ -1,0 +1,331 @@
+package com.momo.app.ui.screens
+
+import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.CameraAlt
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import coil3.compose.AsyncImage
+import com.momo.app.data.storage.CloudBaseStorageHelper
+import com.momo.app.ui.theme.*
+import com.momo.app.viewmodel.ProfileEditViewModel
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ProfileEditScreen(
+    onBack: () -> Unit,
+    viewModel: ProfileEditViewModel = viewModel()
+) {
+    val uiState by viewModel.uiState.collectAsState()
+    val user = uiState.user
+    val context = LocalContext.current
+
+    val nicknameError = when {
+        uiState.editNickname.isNotEmpty() && uiState.editNickname.length < 2 -> "昵称至少需要2个字符"
+        else -> null
+    }
+
+    val avatarLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            val fileSize = context.contentResolver.query(it, null, null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val sizeIndex = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                    if (sizeIndex >= 0) cursor.getLong(sizeIndex) else 0L
+                } else 0L
+            } ?: 0L
+            if (fileSize > CloudBaseStorageHelper.MAX_RAW_FILE_SIZE) {
+                Toast.makeText(context, "图片文件过大，请选择小于20MB的图片", Toast.LENGTH_SHORT).show()
+                return@rememberLauncherForActivityResult
+            }
+            viewModel.onAvatarPicked(it)
+        }
+    }
+
+    LaunchedEffect(uiState.saveSuccess) {
+        if (uiState.saveSuccess) {
+            onBack()
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(DarkBackground)
+    ) {
+        TopAppBar(
+            title = { Text("编辑资料", color = TextPrimary, fontSize = 18.sp) },
+            navigationIcon = {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary)
+                }
+            },
+            actions = {
+                TextButton(
+                    onClick = { viewModel.saveProfile() },
+                    enabled = !uiState.isSaving
+                ) {
+                    if (uiState.isSaving) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = SakuraPrimary,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text("保存", color = SakuraPrimary, fontWeight = FontWeight.Bold)
+                    }
+                }
+            },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = DarkBackground)
+        )
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Box(
+                modifier = Modifier
+                    .size(120.dp)
+                    .clip(CircleShape)
+                    .clickable(enabled = !uiState.isUploadingAvatar) {
+                        avatarLauncher.launch("image/*")
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                val displayUri = uiState.localAvatarUri
+                val rawPhotoUrl = user?.photoUrl
+                var resolvedFallback by remember(rawPhotoUrl) { mutableStateOf<String?>(null) }
+                LaunchedEffect(rawPhotoUrl) {
+                    val resolved = CloudBaseStorageHelper.resolveAvatarUrl(rawPhotoUrl)
+                    if (resolved != null) {
+                        resolvedFallback = resolved
+                        viewModel.savePersistedAvatarUrl(resolved)
+                    }
+                }
+                val displayUrl = uiState.cloudAvatarUrl ?: resolvedFallback ?: uiState.persistedResolvedUrl
+
+                if (displayUri != null) {
+                    AsyncImage(
+                        model = displayUri,
+                        contentDescription = "头像",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else if (displayUrl != null) {
+                    AsyncImage(
+                        model = displayUrl,
+                        contentDescription = "头像",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(SakuraPrimary.copy(alpha = 0.2f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Person,
+                            contentDescription = "头像",
+                            tint = SakuraPrimary,
+                            modifier = Modifier.size(48.dp)
+                        )
+                    }
+                }
+
+                if (uiState.isUploadingAvatar) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.5f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(32.dp),
+                            color = SakuraPrimary,
+                            strokeWidth = 3.dp
+                        )
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(SakuraPrimary),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.CameraAlt,
+                        contentDescription = "更换头像",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = if (uiState.isUploadingAvatar) "正在上传头像..." else "点击更换头像",
+                color = TextTertiary,
+                fontSize = 13.sp
+            )
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(DarkSurface)
+                    .padding(16.dp)
+            ) {
+                Text(
+                    text = "昵称",
+                    color = TextTertiary,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+
+                OutlinedTextField(
+                    value = uiState.editNickname,
+                    onValueChange = { if (it.length <= 48) viewModel.onNicknameChange(it) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = {
+                        Text("请输入昵称", color = TextTertiary)
+                    },
+                    isError = nicknameError != null,
+                    supportingText = nicknameError?.let {
+                        { Text(it, color = Color(0xFFFF5252), fontSize = 12.sp) }
+                    },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = SakuraPrimary,
+                        unfocusedBorderColor = DarkSurfaceVariant,
+                        cursorColor = SakuraPrimary,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            if (user != null) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(DarkSurface)
+                        .padding(16.dp)
+                ) {
+                    Text(
+                        text = "邮箱",
+                        color = TextTertiary,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    Text(
+                        text = user.email,
+                        color = TextSecondary,
+                        fontSize = 15.sp
+                    )
+                }
+            }
+
+            if (uiState.error != null) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    color = Color(0xFFFF5252).copy(alpha = 0.15f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Filled.Error,
+                            contentDescription = null,
+                            tint = Color(0xFFFF5252),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            uiState.error!!,
+                            color = Color(0xFFFF5252),
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            Button(
+                onClick = { viewModel.saveProfile() },
+                enabled = !uiState.isSaving && !uiState.isUploadingAvatar,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(
+                        Brush.horizontalGradient(
+                            colors = listOf(PinkGradientStart, PinkGradientEnd)
+                        ),
+                        RoundedCornerShape(12.dp)
+                    ),
+                colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent)
+            ) {
+                if (uiState.isSaving) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        color = Color.White,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("保存中...", color = Color.White, fontWeight = FontWeight.Medium)
+                } else if (uiState.isUploadingAvatar) {
+                    Text("头像上传中...", color = Color.White.copy(alpha = 0.6f), fontWeight = FontWeight.Medium, fontSize = 16.sp)
+                } else {
+                    Text("保存修改", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(32.dp))
+        }
+    }
+}
