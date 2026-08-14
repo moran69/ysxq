@@ -324,7 +324,6 @@ private fun KanjuAiHomeContent(
                         onClick = {
                             onCardClick(KanjuAiHomeCard(
                                 id = card.id,
-                                variantId = card.variantId,
                                 title = card.title,
                                 posterUrl = card.posterUrl,
                                 year = card.year,

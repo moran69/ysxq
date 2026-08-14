@@ -189,15 +189,19 @@ data class KanjuAiHomeSection(
 @Serializable
 data class KanjuAiHomeCard(
     val id: String = "",
-    @SerialName("variantId") val variantId: String = "",
+    @SerialName("poster_url") val posterUrl: String = "",
     val title: String = "",
-    @SerialName("posterUrl") val posterUrl: String = "",
     val year: Int = 0,
     val remarks: String = "",
     @SerialName("content_kind") val contentKind: String = "",
     @SerialName("heat_value") val heatValue: Double = 0.0,
-    @SerialName("rank_position") val rankPosition: Int = 0
-)
+    @SerialName("rank_position") val rankPosition: Int = 0,
+    val genres: List<String> = emptyList(),
+    val actors: List<String> = emptyList(),
+    @SerialName("detail_url") val detailUrl: String = ""
+) {
+    val variantId: String get() = id
+}
 
 // ===== 热门榜单 (/v1/browse/catalog?sort=trending) =====
 
