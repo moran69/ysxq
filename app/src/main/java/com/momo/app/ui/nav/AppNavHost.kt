@@ -368,16 +368,20 @@ fun AppNavHost(
                 Screen.Detail.route,
                 arguments = listOf(
                     navArgument("videoId") { type = NavType.IntType },
-                    navArgument("susou") { type = NavType.IntType; defaultValue = 0 }
+                    navArgument("susou") { type = NavType.IntType; defaultValue = 0 },
+                    navArgument("kanjuai") { type = NavType.IntType; defaultValue = 0 }
                 ),
                 exitTransition = { fadeOut(tween(0)) },
                 popExitTransition = { fadeOut(tween(0)) }
             ) { entry ->
                 val videoId = entry.arguments?.getInt("videoId") ?: return@composable Box {}
                 val isSusou = entry.arguments?.getInt("susou") == 1
-                val external = if (isSusou) {
-                    com.momo.app.data.susou.SusouNavHolder.take(videoId)
-                } else null
+                val isKanjuAi = entry.arguments?.getInt("kanjuai") == 1
+                val external = when {
+                    isSusou -> com.momo.app.data.susou.SusouNavHolder.take(videoId)
+                    isKanjuAi -> com.momo.app.data.kanjuai.KanjuAiNavHolder.take(videoId)
+                    else -> null
+                }
                 DetailScreen(
                     videoId = videoId,
                     onBack = { navController.popBackStack() },

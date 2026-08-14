@@ -75,7 +75,7 @@ class DetailViewModel : ViewModel() {
         val filtered = sources.mapNotNull { src ->
             val eps = src.episodes.filter { ep ->
                 val url = ep.url.trim()
-                url.startsWith("http") || url.startsWith("NBY-")
+                url.startsWith("http") || url.startsWith("NBY-") || url.startsWith("YJ-")
             }
             if (eps.isEmpty()) null else VideoSource(label = src.label, episodes = eps)
         }
