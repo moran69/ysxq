@@ -2451,26 +2451,9 @@ private fun InlinePlayerGestureOverlay(
                                 waitForUpOrCancellation()
                                 if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
                             } else {
-                                // 单击: 左侧 1/4 快退10秒, 右侧 1/4 快进10秒, 中间切控制栏
-                                val tapX = firstUp.position.x
-                                when {
-                                    tapX < size.width / 4f -> {
-                                        val target = (exoPlayer.currentPosition - 10_000L)
-                                            .coerceAtLeast(0L)
-                                        exoPlayer.seekTo(target)
-                                        tapSeekDelta = -10_000L
-                                        showTapSeekHint = true
-                                    }
-                                    tapX > size.width * 3f / 4f -> {
-                                        val max = exoPlayer.duration.coerceAtLeast(0L)
-                                        val target = (exoPlayer.currentPosition + 10_000L)
-                                            .coerceAtMost(if (max > 0) max else Long.MAX_VALUE)
-                                        exoPlayer.seekTo(target)
-                                        tapSeekDelta = 10_000L
-                                        showTapSeekHint = true
-                                    }
-                                    else -> onToggleControls()
-                                }
+                                // 单击：切换控制栏。小窗不做左右±10s 点击快进快退，
+                                // 否则退出全屏后在小的预览窗里极易误触跳进度
+                                onToggleControls()
                             }
                         }
                     }
