@@ -377,10 +377,13 @@ fun AppNavHost(
                 val videoId = entry.arguments?.getInt("videoId") ?: return@composable Box {}
                 val isSusou = entry.arguments?.getInt("susou") == 1
                 val isKanjuAi = entry.arguments?.getInt("kanjuai") == 1
-                val external = when {
-                    isSusou -> com.momo.app.data.susou.SusouNavHolder.take(videoId)
-                    isKanjuAi -> com.momo.app.data.kanjuai.KanjuAiNavHolder.take(videoId)
-                    else -> null
+                // remember: 只取一次, 全屏切换等重组不再重复 take (NavHolder 取出即删)
+                val external = remember(videoId, isSusou, isKanjuAi) {
+                    when {
+                        isSusou -> com.momo.app.data.susou.SusouNavHolder.take(videoId)
+                        isKanjuAi -> com.momo.app.data.kanjuai.KanjuAiNavHolder.take(videoId)
+                        else -> null
+                    }
                 }
                 DetailScreen(
                     videoId = videoId,

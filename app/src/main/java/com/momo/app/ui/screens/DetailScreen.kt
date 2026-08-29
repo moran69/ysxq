@@ -81,6 +81,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -109,6 +110,7 @@ import com.momo.app.ui.components.*
 import com.momo.app.ui.danmaku.*
 import com.momo.app.ui.theme.*
 import com.momo.app.data.auth.AuthRepository
+import com.momo.app.data.danmaku.DmkuApi
 
 import com.momo.app.viewmodel.DetailViewModel
 import kotlinx.coroutines.Dispatchers
@@ -184,6 +186,10 @@ fun DetailScreen(
     var showStopCastConfirm by remember { mutableStateOf(false) }
     var castCommandHandler by remember { mutableStateOf<((Int) -> Unit)?>(null) }
     var pendingCastEpisodeIndex by remember { mutableStateOf<Int?>(null) }
+    // 投屏进度（毫秒）与拖动进度处理器（TV 端 REL_TIME seek）
+    var castPositionMs by remember { mutableLongStateOf(0L) }
+    var castDurationMs by remember { mutableLongStateOf(0L) }
+    var castSeekHandler by remember { mutableStateOf<((Long) -> Unit)?>(null) }
 
     val favoritesStore = remember { context.favoritesStore() }
     val watchHistoryStore = remember { context.watchHistoryStore() }
@@ -205,6 +211,8 @@ fun DetailScreen(
 
     // 当前是否 NBY 加密线路(用于播放失败提示)
     var isNbyLine by remember { mutableStateOf(false) }
+    // 最近一次 prepare 的原始地址（播放失败重试时重新解析并 prepare）
+    var lastPreparedUrl by remember { mutableStateOf<String?>(null) }
 
     // 网络数据源工厂提升到 remember 外，LaunchedEffect 里给 NBY 解密 URL 显式构建 HlsMediaSource 用
     val httpDataSourceFactory = remember {
@@ -330,6 +338,30 @@ fun DetailScreen(
         }
     }
     val currentUrl = viewModel.getCurrentEpisodeUrl()
+    // 统一的播放准备入口（首次加载与播放失败重试共用）
+    fun prepareAndPlay(originalUrl: String, playUrl: String) {
+        if (playUrl.startsWith("NBY-")) {
+            // 解密失败: 提示并放弃该线路
+            playerError = "该线路解密失败，请尝试切换其他线路"
+            isBuffering = false
+        } else if (playUrl.startsWith("YJ-")) {
+            // 看剧AI token 解析失败
+            playerError = "播放线路解析失败，请尝试切换其他线路"
+            isBuffering = false
+        } else if (playUrl != originalUrl) {
+            // NBY/看剧AI 解析返回的 URL 无 .m3u8 后缀, DefaultMediaSourceFactory
+            // 按 MIME 推断成 Progressive 会失败, 显式构建 HlsMediaSource
+            val mediaSource = androidx.media3.exoplayer.hls.HlsMediaSource.Factory(dataSourceFactory)
+                .createMediaSource(MediaItem.fromUri(playUrl))
+            exoPlayer.setMediaSource(mediaSource)
+            exoPlayer.prepare()
+            exoPlayer.playWhenReady = false
+        } else {
+            exoPlayer.setMediaItem(MediaItem.fromUri(playUrl))
+            exoPlayer.prepare()
+            exoPlayer.playWhenReady = false
+        }
+    }
     LaunchedEffect(currentUrl) {
         isNbyLine = currentUrl?.startsWith("NBY-") == true
         if (currentUrl != null) {
@@ -339,30 +371,11 @@ fun DetailScreen(
             hasInitialHistorySaved = false
             pendingSeekPosition = null
             userRequestedPlay = false
+            lastPreparedUrl = currentUrl
             // NBY 加密地址懒解密(直链原样返回)
             val playUrl = viewModel.resolvePlayUrl(currentUrl)
             android.util.Log.d("DetailPlay", "playUrl=${playUrl.take(70)} changed=${playUrl != currentUrl}")
-            if (playUrl.startsWith("NBY-")) {
-                // 解密失败: 提示并放弃该线路
-                playerError = "该线路解密失败，请尝试切换其他线路"
-                isBuffering = false
-            } else if (playUrl.startsWith("YJ-")) {
-                // 看剧AI token 解析失败
-                playerError = "播放线路解析失败，请尝试切换其他线路"
-                isBuffering = false
-            } else if (playUrl != currentUrl) {
-                // NBY/看剧AI 解析返回的 URL 无 .m3u8 后缀, DefaultMediaSourceFactory
-                // 按 MIME 推断成 Progressive 会失败, 显式构建 HlsMediaSource
-                val mediaSource = androidx.media3.exoplayer.hls.HlsMediaSource.Factory(dataSourceFactory)
-                    .createMediaSource(MediaItem.fromUri(playUrl))
-                exoPlayer.setMediaSource(mediaSource)
-                exoPlayer.prepare()
-                exoPlayer.playWhenReady = false
-            } else {
-                exoPlayer.setMediaItem(MediaItem.fromUri(playUrl))
-                exoPlayer.prepare()
-                exoPlayer.playWhenReady = false
-            }
+            prepareAndPlay(currentUrl, playUrl)
         }
     }
 
@@ -452,10 +465,28 @@ fun DetailScreen(
         }
     }
 
-    // 视频加载时生成示例弹幕（实际使用时从弹幕 API 获取）
+    // 视频加载时拉取真实弹幕（dmku.hls.one 公益弹幕库，按剧名+集数匹配爱奇艺源）
     LaunchedEffect(state.video?.id, state.currentEpisodeIndex) {
         if (state.video != null) {
-            danmakuList = com.momo.app.ui.danmaku.DanmakuParser.generateSampleDanmaku()
+            val name = state.video?.name ?: ""
+            val episodeNo = state.currentEpisodeIndex + 1
+            val entries = DmkuApi.resolveDanmaku(name, episodeNo)
+            danmakuList = if (entries.isNotEmpty()) {
+                entries.map { e ->
+                    com.momo.app.ui.danmaku.DanmakuItem(
+                        text = e.text,
+                        time = e.timeMs,
+                        color = e.color,
+                        type = when (e.type) {
+                            5 -> com.momo.app.ui.danmaku.DanmakuType.TOP
+                            4 -> com.momo.app.ui.danmaku.DanmakuType.BOTTOM
+                            else -> com.momo.app.ui.danmaku.DanmakuType.SCROLL
+                        }
+                    )
+                }
+            } else {
+                emptyList()
+            }
         }
     }
 
@@ -708,7 +739,7 @@ fun DetailScreen(
             currentSpeed = exoPlayer.playbackParameters.speed,
             onSpeedSelected = { speed ->
                 exoPlayer.setPlaybackParameters(androidx.media3.common.PlaybackParameters(speed))
-                kotlinx.coroutines.GlobalScope.launch {
+                scope.launch {
                     val prefs = context.userPreferences()
                     prefs.savePlaybackSpeed(speed)
                 }
@@ -797,10 +828,13 @@ fun DetailScreen(
                     lastCastPositionMs = 0L
                 }
             },
-            onCastProgressUpdate = { progress, playbackState ->
-                castProgress = progress
+            onCastProgressUpdate = { currentMs, totalMs, playbackState ->
+                castPositionMs = currentMs
+                castDurationMs = totalMs
+                castProgress = "${formatMs(currentMs)} / ${formatMs(totalMs)}"
                 castPlaybackState = playbackState
             },
+            onCastSeekRegistered = { handler -> castSeekHandler = handler },
             onCastDisconnected = {
                 showDisconnectDialog = true
             },
@@ -946,14 +980,18 @@ fun DetailScreen(
         if (isCasting) {
             CastingControlPanel(
                 deviceName = castDeviceName ?: "设备",
-                progress = castProgress,
+                positionMs = castPositionMs,
+                durationMs = castDurationMs,
+                playbackState = castPlaybackState,
                 currentEpisodeIndex = state.currentEpisodeIndex,
                 totalEpisodes = state.sources.getOrNull(state.currentSourceIndex)?.episodes?.size ?: 0,
                 isFullscreen = true,
                 onToggleFullscreen = { toggleFullscreen() },
                 onPrevEpisode = { castCommandHandler?.invoke(-1) },
                 onStopCast = { castCommandHandler?.invoke(0) },
-                onNextEpisode = { castCommandHandler?.invoke(1) }
+                onNextEpisode = { castCommandHandler?.invoke(1) },
+                onTogglePlayPause = { castCommandHandler?.invoke(if (castPlaybackState == "PLAYING") 2 else 3) },
+                onSeek = { targetMs -> castSeekHandler?.invoke(targetMs) }
             )
         } else {
         FullscreenPlayer(
@@ -1007,18 +1045,28 @@ fun DetailScreen(
             danmakuConfig = danmakuConfig,
             onDanmakuConfigChange = { danmakuConfig = it },
             onSendDanmaku = { text, color, type ->
+                val posMs = exoPlayer.currentPosition.coerceAtLeast(0L)
                 val newItem = com.momo.app.ui.danmaku.DanmakuItem(
                     text = text,
-                    time = exoPlayer.currentPosition.coerceAtLeast(0L),
+                    time = posMs,
                     color = color,
                     type = type
                 )
                 danmakuList = danmakuList + newItem
+                // 同步发送到 dmku 公益弹幕库（真实弹幕服务）
+                val name = state.video?.name ?: ""
+                val episodeNo = state.currentEpisodeIndex + 1
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                    val hex = "#%06X".format(color.toInt() and 0xFFFFFF)
+                    DmkuApi.sendDanmaku(name, episodeNo, posMs, text, hex)
+                }
             }
         )
         } // end else (not casting)
     } else {
         LaunchedEffect(videoId) {
+            // 已加载过则跳过：全屏退出/重组时避免重复 loadDetail 报错与重复注入重置进度
+            if (state.video != null && state.sources.isNotEmpty()) return@LaunchedEffect
             if (externalVideo != null && externalSources != null) {
                 viewModel.injectExternal(externalVideo, externalSources)
             } else {
@@ -1065,14 +1113,18 @@ fun DetailScreen(
                             if (isCasting) {
                                 CastingControlPanel(
                                     deviceName = castDeviceName ?: "设备",
-                                    progress = castProgress,
+                                    positionMs = castPositionMs,
+                                    durationMs = castDurationMs,
+                                    playbackState = castPlaybackState,
                                     currentEpisodeIndex = state.currentEpisodeIndex,
                                     totalEpisodes = state.sources.getOrNull(state.currentSourceIndex)?.episodes?.size ?: 0,
                                     isFullscreen = false,
                                     onToggleFullscreen = { toggleFullscreen() },
                                     onPrevEpisode = { castCommandHandler?.invoke(-1) },
                                     onStopCast = { castCommandHandler?.invoke(0) },
-                                    onNextEpisode = { castCommandHandler?.invoke(1) }
+                                    onNextEpisode = { castCommandHandler?.invoke(1) },
+                                    onTogglePlayPause = { castCommandHandler?.invoke(if (castPlaybackState == "PLAYING") 2 else 3) },
+                                    onSeek = { targetMs -> castSeekHandler?.invoke(targetMs) }
                                 )
                             }
 
@@ -1109,7 +1161,12 @@ fun DetailScreen(
                                         OutlinedButton(onClick = {
                                             playerError = null
                                             hasMediaLoaded = false
-                                            togglePlayPause()
+                                            isBuffering = true
+                                            userRequestedPlay = true
+                                            val url = lastPreparedUrl
+                                            if (url != null) {
+                                                scope.launch { prepareAndPlay(url, viewModel.resolvePlayUrl(url)) }
+                                            }
                                         }, colors = ButtonDefaults.outlinedButtonColors(contentColor = SakuraPrimary)) { Text("重试") }
                                     }
                                 }
@@ -1162,6 +1219,35 @@ fun DetailScreen(
 
         if (!isLocked && (showControls || !isPlaying)) {
                                 Box(modifier = Modifier.fillMaxSize()) {
+                                    // 顶部信息条: 剧名 + 集数
+                                    Column(
+                                        modifier = Modifier
+                                            .align(Alignment.TopStart)
+                                            .fillMaxWidth()
+                                            .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.55f), Color.Transparent)))
+                                            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 20.dp)
+                                    ) {
+                                        Text(
+                                            video.name,
+                                            color = Color.White,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        val curEp = state.sources.getOrNull(state.currentSourceIndex)
+                                            ?.episodes?.getOrNull(state.currentEpisodeIndex)
+                                        if (curEp?.name?.isNotBlank() == true) {
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(
+                                                curEp.name,
+                                                color = Color.White.copy(alpha = 0.75f),
+                                                fontSize = 12.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
                                     Row(
                                         modifier = Modifier
                                             .align(Alignment.TopEnd)
@@ -1473,15 +1559,17 @@ private fun FullscreenPlayer(
                         )
                     }
                     var trackIdx = 0
-                    textGroups.forEach { group ->
+                    textGroups.forEachIndexed { groupIdx, group ->
                         (0 until group.length).forEach { i ->
                             val format = group.getTrackFormat(i)
                             val label = format.label ?: format.language ?: "字幕 ${trackIdx + 1}"
                             val supported = group.isTrackSupported(i)
                             Surface(
                                 modifier = Modifier.fillMaxWidth().clickable(enabled = supported) {
+                                    // 显式选中用户点击的轨道（否则只恢复字幕类型，播放器仍自动选默认轨）
                                     val params = exoPlayer.trackSelectionParameters.buildUpon()
                                         .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_TEXT, false)
+                                        .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, i))
                                         .build()
                                     exoPlayer.trackSelectionParameters = params
                                     showSubtitleDialog = false
@@ -1905,19 +1993,47 @@ private fun FullscreenPlayer(
 
                 if (!isLocked && !isBuffering) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        if (isPlaying) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            // 快退 10 秒
                             IconButton(
-                                onClick = { exoPlayer.pause() },
-                                modifier = Modifier.size(48.dp).background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                                onClick = {
+                                    val target = (exoPlayer.currentPosition - 10_000L).coerceAtLeast(0L)
+                                    exoPlayer.seekTo(target)
+                                    onSeekCompleted()
+                                    tapSeekDelta = -10_000L
+                                    showTapSeekHint = true
+                                },
+                                modifier = Modifier.size(46.dp).background(Color.Black.copy(alpha = 0.35f), CircleShape)
                             ) {
-                                Icon(Icons.Filled.Pause, null, tint = Color.White, modifier = Modifier.size(32.dp))
+                                Icon(Icons.Filled.Replay10, "快退10秒", tint = Color.White, modifier = Modifier.size(26.dp))
                             }
-                        } else {
+                            // 播放/暂停 主按钮
                             IconButton(
                                 onClick = onTogglePlayPause,
-                                modifier = Modifier.size(48.dp).background(Color.White.copy(alpha = 0.15f), CircleShape)
+                                modifier = Modifier.size(60.dp).background(Color.Black.copy(alpha = 0.45f), CircleShape)
                             ) {
-                                Icon(Icons.Filled.PlayArrow, null, tint = Color.White, modifier = Modifier.size(32.dp))
+                                Icon(
+                                    if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                                    null, tint = Color.White, modifier = Modifier.size(40.dp)
+                                )
+                            }
+                            // 快进 10 秒
+                            IconButton(
+                                onClick = {
+                                    val max = exoPlayer.duration.coerceAtLeast(0L)
+                                    val target = (exoPlayer.currentPosition + 10_000L)
+                                        .coerceAtMost(if (max > 0) max else Long.MAX_VALUE)
+                                    exoPlayer.seekTo(target)
+                                    onSeekCompleted()
+                                    tapSeekDelta = 10_000L
+                                    showTapSeekHint = true
+                                },
+                                modifier = Modifier.size(46.dp).background(Color.Black.copy(alpha = 0.35f), CircleShape)
+                            ) {
+                                Icon(Icons.Filled.Forward10, "快进10秒", tint = Color.White, modifier = Modifier.size(26.dp))
                             }
                         }
                     }
@@ -2474,15 +2590,41 @@ private fun InfoRow(label: String, value: String, maxLines: Int = 1) {
 @Composable
 private fun CastingControlPanel(
     deviceName: String,
-    progress: String,
+    positionMs: Long,
+    durationMs: Long,
+    playbackState: String,
     currentEpisodeIndex: Int,
     totalEpisodes: Int,
     isFullscreen: Boolean,
     onToggleFullscreen: () -> Unit,
     onPrevEpisode: () -> Unit,
     onStopCast: () -> Unit,
-    onNextEpisode: () -> Unit
+    onNextEpisode: () -> Unit,
+    onTogglePlayPause: () -> Unit,
+    onSeek: (Long) -> Unit = {}
 ) {
+    // 两次 SOAP 轮询(3s)之间本地插值，让进度显示平滑推进
+    var interpolatedMs by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(positionMs, playbackState) {
+        interpolatedMs = 0L
+        if (playbackState == "PLAYING") {
+            while (isActive) {
+                delay(1000)
+                interpolatedMs += 1000L
+            }
+        }
+    }
+    val displayMs = (positionMs + interpolatedMs).coerceAtMost(if (durationMs > 0) durationMs else Long.MAX_VALUE)
+
+    val stateText = when (playbackState) {
+        "PLAYING" -> "播放中"
+        "PAUSED_PLAYBACK", "PAUSED" -> "已暂停"
+        "BUFFERING" -> "缓冲中"
+        "STOPPED" -> "已停止"
+        "TRANSITIONING" -> "切换中"
+        else -> ""
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -2512,16 +2654,29 @@ private fun CastingControlPanel(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                progress,
-                color = Color.White,
-                fontSize = if (isFullscreen) 16.sp else 14.sp,
-                fontWeight = FontWeight.Medium
-            )
+            if (stateText.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(stateText, color = Color.White.copy(alpha = 0.6f), fontSize = if (isFullscreen) 13.sp else 11.sp)
+            }
+            Spacer(modifier = Modifier.height(if (isFullscreen) 10.dp else 6.dp))
+            if (isFullscreen) {
+                CastSeekBar(
+                    positionMs = displayMs,
+                    durationMs = durationMs,
+                    compact = false,
+                    onSeek = onSeek
+                )
+            } else {
+                Text(
+                    "${formatMs(displayMs)} / ${formatMs(durationMs)}",
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
             Spacer(modifier = Modifier.height(if (isFullscreen) 14.dp else 8.dp))
             Row(
-                horizontalArrangement = Arrangement.spacedBy(if (isFullscreen) 32.dp else 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(if (isFullscreen) 24.dp else 14.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 CastTextButton(
@@ -2530,13 +2685,20 @@ private fun CastingControlPanel(
                     onClick = onPrevEpisode,
                     fontSize = if (isFullscreen) 16.sp else 14.sp
                 )
-                CastTextButton(
-                    text = "结束投屏",
-                    enabled = true,
-                    onClick = onStopCast,
-                    isStop = true,
-                    fontSize = if (isFullscreen) 16.sp else 14.sp
-                )
+                // 播放/暂停遥控
+                IconButton(
+                    onClick = onTogglePlayPause,
+                    modifier = Modifier
+                        .size(if (isFullscreen) 60.dp else 46.dp)
+                        .background(Color.White.copy(alpha = 0.15f), CircleShape)
+                ) {
+                    Icon(
+                        if (playbackState == "PLAYING") Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        contentDescription = if (playbackState == "PLAYING") "暂停" else "播放",
+                        tint = Color.White,
+                        modifier = Modifier.size(if (isFullscreen) 32.dp else 24.dp)
+                    )
+                }
                 CastTextButton(
                     text = "下一集",
                     enabled = currentEpisodeIndex < totalEpisodes - 1,
@@ -2544,11 +2706,62 @@ private fun CastingControlPanel(
                     fontSize = if (isFullscreen) 16.sp else 14.sp
                 )
             }
+            Spacer(modifier = Modifier.height(if (isFullscreen) 12.dp else 6.dp))
+            CastTextButton(
+                text = "结束投屏",
+                enabled = true,
+                onClick = onStopCast,
+                isStop = true,
+                fontSize = if (isFullscreen) 16.sp else 14.sp
+            )
             if (!isFullscreen) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text("点击切换全屏", color = Color.White.copy(alpha = 0.3f), fontSize = 10.sp)
             }
         }
+    }
+}
+
+/**
+ * 投屏进度条：拖动结束通过 DLNA REL_TIME Seek 让 TV 跳转。
+ */
+@Composable
+private fun CastSeekBar(positionMs: Long, durationMs: Long, compact: Boolean, onSeek: (Long) -> Unit) {
+    var isDragging by remember { mutableStateOf(false) }
+    var dragFraction by remember { mutableFloatStateOf(0f) }
+    val fraction = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth(if (compact) 0.9f else 0.92f)
+    ) {
+        Text(
+            formatMs(positionMs),
+            color = Color.White.copy(alpha = 0.8f),
+            fontSize = if (compact) 10.sp else 12.sp
+        )
+        Slider(
+            value = if (isDragging) dragFraction else fraction,
+            onValueChange = {
+                isDragging = true
+                dragFraction = it
+            },
+            onValueChangeFinished = {
+                isDragging = false
+                if (durationMs > 0) onSeek((dragFraction * durationMs).toLong())
+            },
+            enabled = durationMs > 0,
+            modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+            colors = SliderDefaults.colors(
+                thumbColor = Color.White,
+                activeTrackColor = SakuraPrimary,
+                inactiveTrackColor = Color.White.copy(alpha = 0.25f)
+            )
+        )
+        Text(
+            formatMs(durationMs),
+            color = Color.White.copy(alpha = 0.8f),
+            fontSize = if (compact) 10.sp else 12.sp
+        )
     }
 }
 
@@ -2595,7 +2808,8 @@ private fun CastDeviceSheet(
     resumePositionMs: Long,
     onDismiss: () -> Unit,
     onCastStateChanged: (Boolean, String?, String) -> Unit,
-    onCastProgressUpdate: (String, String) -> Unit,
+    onCastProgressUpdate: (currentMs: Long, totalMs: Long, playbackState: String) -> Unit,
+    onCastSeekRegistered: (((Long) -> Unit) -> Unit)? = null,
     onCastDisconnected: () -> Unit,
     onCastCommandRegistered: (((Int) -> Unit) -> Unit)?,
     onNextEpisode: () -> Unit,
@@ -2673,6 +2887,20 @@ private fun CastDeviceSheet(
                 -1 -> pendingSwitchDirection = -1
                 0 -> stopCasting()
                 1 -> pendingSwitchDirection = 1
+                2 -> scope.launch(Dispatchers.IO) {
+                    try { DirectDlnaCaster.pause() } catch (_: Exception) { }
+                }
+                3 -> scope.launch(Dispatchers.IO) {
+                    try { DirectDlnaCaster.play() } catch (_: Exception) { }
+                }
+            }
+        }
+    }
+
+    SideEffect {
+        onCastSeekRegistered?.invoke { targetMs ->
+            scope.launch(Dispatchers.IO) {
+                try { DirectDlnaCaster.seek(targetMs) } catch (_: Exception) { }
             }
         }
     }
@@ -2930,7 +3158,6 @@ private fun CastDeviceSheet(
                                                     }
 
                                                     // Continuous progress polling with auto-next
-                                                    var lastPlaybackState = ""
                                                     var stoppedCount = 0
                                                     var pollCount = 0
                                                     while (isActive) {
@@ -2970,6 +3197,10 @@ private fun CastDeviceSheet(
                                                                 sessionComplete = DlnaProxyService.sessionManager?.isSessionComplete(sid) ?: false
                                                             }
 
+                                                            // Query real TV transport state via DirectDlnaCaster SOAP
+                                                            val transportState = DirectDlnaCaster.getTransportState() ?: "UNKNOWN"
+                                                            castPlaybackState = transportState
+
                                                             // Query real TV progress via DirectDlnaCaster SOAP
                                                             val prog = DirectDlnaCaster.getPositionInfo()
                                                             if (prog != null && (prog.first > 0 || prog.second > 0)) {
@@ -2988,10 +3219,10 @@ private fun CastDeviceSheet(
 
                                                             if (totalMs > 0) {
                                                                 castProgress = "${formatMs(currentMs)} / ${formatMs(totalMs)}"
-                                                                onCastProgressUpdate(castProgress, castPlaybackState)
+                                                                onCastProgressUpdate(currentMs, totalMs, transportState)
 
-                                                                // Auto-next when near end
-                                                                if (currentMs >= totalMs - 3000 && currentEpisodeIndex < totalEpisodes - 1) {
+                                                                // Auto-next when near end（仅播放中触发，暂停停在片尾不切集）
+                                                                if (currentMs >= totalMs - 3000 && transportState == "PLAYING" && currentEpisodeIndex < totalEpisodes - 1) {
                                                                     shouldAutoNext = true
                                                                 }
 
@@ -2999,16 +3230,13 @@ private fun CastDeviceSheet(
                                                                 if (pollCount % 5 == 0 && currentMs > 0) {
                                                                     onSaveCastingProgress(currentMs, totalMs)
                                                                 }
+                                                            } else {
+                                                                onCastProgressUpdate(currentMs, totalMs, transportState)
                                                             }
                                                             // Fallback: session complete + TV near end
                                                             if (sessionComplete && currentEpisodeIndex < totalEpisodes - 1) {
                                                                 shouldAutoNext = true
                                                             }
-
-                                                            // Query real TV transport state via DirectDlnaCaster SOAP
-                                                            val transportState = DirectDlnaCaster.getTransportState() ?: "UNKNOWN"
-                                                            castPlaybackState = transportState
-                                                            onCastProgressUpdate(castProgress, castPlaybackState)
 
                                                             // Detect TV playback stopped (not user-initiated)
                                                             // Require 2 consecutive STOPPED states to avoid false triggers
@@ -3022,7 +3250,6 @@ private fun CastDeviceSheet(
                                                             } else {
                                                                 stoppedCount = 0
                                                             }
-                                                            lastPlaybackState = transportState
 
                                                             if (shouldAutoNext && !userStopped) {
                                                                 val switched = switchEpisode(isNext = true)

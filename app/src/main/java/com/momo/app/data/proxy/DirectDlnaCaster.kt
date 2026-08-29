@@ -305,6 +305,32 @@ object DirectDlnaCaster {
         return sendSoapRequest(controlUrl, "urn:schemas-upnp-org:service:AVTransport:1#Play", soapBody)
     }
 
+    /**
+     * Pause playback on the TV via DLNA Pause SOAP action.
+     */
+    suspend fun pause(): Boolean = withContext(Dispatchers.IO) {
+        val controlUrl = cachedControlUrl ?: return@withContext false
+        val soapBody = """
+            <u:Pause xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">
+                <InstanceID>0</InstanceID>
+            </u:Pause>
+        """.trimIndent()
+
+        val result = sendSoapRequest(controlUrl, "urn:schemas-upnp-org:service:AVTransport:1#Pause", soapBody)
+        Log.i(TAG, "Pause result: ${result.success}")
+        result.success
+    }
+
+    /**
+     * Resume/start playback on the TV via DLNA Play SOAP action.
+     */
+    suspend fun play(): Boolean = withContext(Dispatchers.IO) {
+        val controlUrl = cachedControlUrl ?: return@withContext false
+        val result = sendPlay(controlUrl)
+        Log.i(TAG, "Play result: ${result.success}")
+        result.success
+    }
+
     suspend fun stop(device: DLNACast.Device): Boolean = withContext(Dispatchers.IO) {
         val controlUrl = cachedControlUrl ?: findAvTransportControlUrl(device) ?: return@withContext false
         val soapBody = """
