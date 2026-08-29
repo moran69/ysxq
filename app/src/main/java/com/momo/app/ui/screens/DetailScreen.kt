@@ -159,6 +159,8 @@ fun DetailScreen(
     // 当前播放倍速（弹幕滚动速度同步用）
     var playbackSpeedFactor by remember { mutableFloatStateOf(1f) }
     var isFullscreen by remember { mutableStateOf(false) }
+    // 手动退出全屏后置位：抑制"横屏自动进全屏"，直到设备真正回到竖屏一次（避免退出后被拉回横屏反复横跳）
+    var suppressAutoFullscreen by remember { mutableStateOf(false) }
     var showControls by remember { mutableStateOf(true) }
     var isLocked by remember { mutableStateOf(false) }
     var showSpeedDialog by remember { mutableStateOf(false) }
@@ -426,6 +428,22 @@ fun DetailScreen(
         }
     }
 
+    /**
+     * 手动退出全屏（返回键/退出按钮/投屏面板）。
+     * 关键：保持 SENSOR 但置位 suppressAutoFullscreen——若此刻手机还横着，
+     * 不会被自动全屏逻辑立刻拉回去；等真正竖屏一次后才恢复自动全屏。
+     */
+    fun exitFullscreen() {
+        isFullscreen = false
+        isLocked = false
+        suppressAutoFullscreen = true
+        activity?.let { act ->
+            act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
+            WindowCompat.getInsetsController(act.window, act.window.decorView)
+                .show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
     fun saveWatchProgress() {
         val video = state.video ?: return
         if (!AuthRepository.isLoggedIn) return
@@ -528,21 +546,32 @@ fun DetailScreen(
 
     LaunchedEffect(deviceOrientation) {
         if (!hasMediaLoaded && !isCasting) return@LaunchedEffect
-        if (deviceOrientation == Configuration.ORIENTATION_LANDSCAPE && !isFullscreen) {
-            isFullscreen = true
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-            activity?.let { act ->
-                val controller = WindowCompat.getInsetsController(act.window, act.window.decorView)
-                controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                controller.hide(WindowInsetsCompat.Type.systemBars())
+        when (deviceOrientation) {
+            Configuration.ORIENTATION_LANDSCAPE -> {
+                // 手动退出全屏后（还没竖屏过）不再自动进全屏，避免退出被拉回、来回横跳
+                if (!suppressAutoFullscreen && !isFullscreen) {
+                    isFullscreen = true
+                    isLocked = false
+                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                    activity?.let { act ->
+                        val controller = WindowCompat.getInsetsController(act.window, act.window.decorView)
+                        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                        controller.hide(WindowInsetsCompat.Type.systemBars())
+                    }
+                }
             }
-        } else if (deviceOrientation == Configuration.ORIENTATION_PORTRAIT && isFullscreen) {
-            isFullscreen = false
-            isLocked = false
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
-            activity?.let { act ->
-                WindowCompat.getInsetsController(act.window, act.window.decorView)
-                    .show(WindowInsetsCompat.Type.systemBars())
+            Configuration.ORIENTATION_PORTRAIT -> {
+                // 真正回到竖屏一次后，恢复横屏自动全屏能力
+                suppressAutoFullscreen = false
+                if (isFullscreen) {
+                    isFullscreen = false
+                    isLocked = false
+                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
+                    activity?.let { act ->
+                        WindowCompat.getInsetsController(act.window, act.window.decorView)
+                            .show(WindowInsetsCompat.Type.systemBars())
+                    }
+                }
             }
         }
     }
@@ -628,13 +657,7 @@ fun DetailScreen(
     BackHandler {
         if (isLocked) return@BackHandler
         if (isFullscreen) {
-            isFullscreen = false
-            isLocked = false
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
-            activity?.let { act ->
-                WindowCompat.getInsetsController(act.window, act.window.decorView)
-                    .show(WindowInsetsCompat.Type.systemBars())
-            }
+            exitFullscreen()
         } else if (isCasting) {
             showCastExitDialog = true
         } else {
@@ -733,16 +756,16 @@ fun DetailScreen(
     }
 
     fun toggleFullscreen() {
-        isFullscreen = !isFullscreen
-        activity?.let { act ->
-            val controller = WindowCompat.getInsetsController(act.window, act.window.decorView)
-            if (isFullscreen) {
+        if (isFullscreen) {
+            exitFullscreen()
+        } else {
+            isFullscreen = true
+            suppressAutoFullscreen = false
+            activity?.let { act ->
+                val controller = WindowCompat.getInsetsController(act.window, act.window.decorView)
                 act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                 controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
                 controller.hide(WindowInsetsCompat.Type.systemBars())
-            } else {
-                act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
-                controller.show(WindowInsetsCompat.Type.systemBars())
             }
         }
     }
@@ -825,15 +848,7 @@ fun DetailScreen(
                 castDeviceName = deviceName
                 if (casting && progress.isNotEmpty()) castProgress = progress
                 if (casting) {
-                    if (isFullscreen) {
-                        isFullscreen = false
-                        isLocked = false
-                        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
-                        activity?.let { act ->
-                            WindowCompat.getInsetsController(act.window, act.window.decorView)
-                                .show(WindowInsetsCompat.Type.systemBars())
-                        }
-                    }
+                    if (isFullscreen) exitFullscreen()
                     wasPlayingBeforeCast = exoPlayer.isPlaying
                     if (exoPlayer.isPlaying) exoPlayer.pause()
                 } else {
@@ -1040,15 +1055,7 @@ fun DetailScreen(
                 }
             },
             onTogglePlayPause = { togglePlayPause() },
-            onExitFullscreen = {
-                isFullscreen = false
-                isLocked = false
-                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
-                activity?.let { act ->
-                    WindowCompat.getInsetsController(act.window, act.window.decorView)
-                        .show(WindowInsetsCompat.Type.systemBars())
-                }
-            },
+            onExitFullscreen = { exitFullscreen() },
             onSpeedClick = { showSpeedDialog = true },
             onCastClick = { showCastSheet = true },
             onPrevEpisode = { viewModel.selectEpisode(state.currentEpisodeIndex - 1) },
@@ -1122,6 +1129,10 @@ fun DetailScreen(
                                 },
                                 modifier = Modifier.fillMaxSize()
                             )
+                            // 离开竖屏组合时解绑 surface（进全屏/退出详情时），防止 surface 泄漏黑屏
+                            DisposableEffect(Unit) {
+                                onDispose { playerViewRef?.player = null }
+                            }
 
                             if (!isPlaying && !isBuffering && currentUrl == null) {
                                 AsyncImage(model = video.pic, contentDescription = video.name, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
@@ -1634,6 +1645,7 @@ private fun FullscreenPlayer(
         if (showBrightnessIndicator) { delay(800); showBrightnessIndicator = false }
     }
 
+    var fullscreenPlayerView by remember { mutableStateOf<PlayerView?>(null) }
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
             factory = { ctx ->
@@ -1641,10 +1653,14 @@ private fun FullscreenPlayer(
                     player = exoPlayer
                     useController = false
                     setOnTouchListener { _, _ -> false }
-                }
+                }.also { fullscreenPlayerView = it }
             },
             modifier = Modifier.fillMaxSize()
         )
+        // 退出全屏时及时解绑 surface，避免与竖屏 PlayerView 抢占导致黑屏
+        DisposableEffect(Unit) {
+            onDispose { fullscreenPlayerView?.player = null }
+        }
 
         // B站风格弹幕渲染层
         DanmakuOverlay(
