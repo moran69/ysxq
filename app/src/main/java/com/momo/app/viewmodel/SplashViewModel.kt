@@ -40,19 +40,8 @@ class SplashViewModel(application: Application) : AndroidViewModel(application) 
     private fun startPreload() {
         viewModelScope.launch {
             try {
-                _state.value = _state.value.copy(loadingMessage = "正在检查更新...", progress = 0.05f)
-
-                try {
-                    val updateInfo = UpdateChecker.checkForUpdate()
-                    if (updateInfo != null) {
-                        _state.value = _state.value.copy(
-                            updateAvailable = updateInfo,
-                            loadingMessage = "发现新版本 ${updateInfo.versionName}"
-                        )
-                        return@launch
-                    }
-                } catch (_: Exception) { }
-
+                // 更新检查由 App.autoCheck() 全局负责（发现新版本弹统一弹窗），
+                // 启动页不再自查，避免与全局弹窗同时出现两个更新窗口
                 _state.value = _state.value.copy(loadingMessage = "正在连接服务器...", progress = 0.1f)
 
                 if (cache.homeLoaded && cache.categories.isNotEmpty()) {
