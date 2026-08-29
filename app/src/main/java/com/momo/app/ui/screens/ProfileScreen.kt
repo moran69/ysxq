@@ -223,8 +223,8 @@ private fun AuthenticatedContent(
             val info = UpdateChecker.checkForUpdate()
             isCheckingUpdate = false
             if (info != null) {
-                updateInfo = info
-                showUpdateDialog = true
+                // 复用全局自动更新弹窗（统一样式，避免出现两个更新弹窗）
+                UpdateChecker.pendingUpdate.value = info
             } else {
                 updateCheckMessage = "已是最新版本"
             }
@@ -508,8 +508,8 @@ private fun GuestContent(
             val info = UpdateChecker.checkForUpdate()
             isCheckingUpdate = false
             if (info != null) {
-                updateInfo = info
-                showUpdateDialog = true
+                // 复用全局自动更新弹窗（统一样式，避免出现两个更新弹窗）
+                UpdateChecker.pendingUpdate.value = info
             } else {
                 updateCheckMessage = "已是最新版本"
             }

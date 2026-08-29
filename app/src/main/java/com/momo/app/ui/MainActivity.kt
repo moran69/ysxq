@@ -11,7 +11,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -25,7 +29,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
@@ -33,6 +39,11 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.navigation.compose.rememberNavController
 import com.momo.app.data.update.UpdateChecker
 import com.momo.app.ui.nav.AppNavHost
+import com.momo.app.ui.theme.DarkSurface
+import com.momo.app.ui.theme.SakuraPrimary
+import com.momo.app.ui.theme.TextPrimary
+import com.momo.app.ui.theme.TextSecondary
+import com.momo.app.ui.theme.TextTertiary
 import com.momo.app.ui.theme.YsxqAppTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -104,8 +115,8 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
- * 全局自动更新弹窗：App 启动后台检查发现新版本后提示，
- * 点「立即更新」应用内下载（带进度），完成后自动调起系统安装页。
+ * 全局自动更新弹窗（应用唯一更新弹窗，Profile 手动检查也复用）：
+ * 发现新版本后提示，点「立即更新」应用内下载（带进度），完成后自动调起系统安装页。
  * forceUpdate=true 时不给「稍后」按钮，强制升级。
  */
 @Composable
@@ -114,53 +125,71 @@ private fun AutoUpdatePrompt() {
     val info by UpdateChecker.pendingUpdate.collectAsState()
     var downloading by remember { mutableStateOf(false) }
     var progress by remember { mutableFloatStateOf(0f) }
+    var downloadFailed by remember { mutableStateOf(false) }
 
     val updateInfo = info ?: return
     AlertDialog(
         onDismissRequest = {
             if (!updateInfo.forceUpdate && !downloading) UpdateChecker.dismissUpdate()
         },
-        title = { Text("发现新版本 v${updateInfo.versionName}") },
+        containerColor = DarkSurface,
+        shape = RoundedCornerShape(20.dp),
+        title = { Text("发现新版本 v${updateInfo.versionName}", color = TextPrimary, fontWeight = FontWeight.Bold) },
         text = {
             Column {
                 if (updateInfo.updateLog.isNotBlank()) {
-                    Text(updateInfo.updateLog)
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(updateInfo.updateLog, color = TextSecondary)
+                    Spacer(modifier = Modifier.height(10.dp))
                 }
                 if (downloading) {
                     LinearProgressIndicator(
                         progress = { progress },
-                        modifier = Modifier.fillMaxWidth().height(4.dp)
+                        modifier = Modifier.fillMaxWidth().height(4.dp),
+                        color = SakuraPrimary
                     )
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text("已下载 ${(progress * 100).toInt()}%", fontSize = 12.sp)
+                    Text("已下载 ${(progress * 100).toInt()}%", color = TextTertiary, fontSize = 12.sp)
+                }
+                if (downloadFailed) {
+                    Text("下载失败，请重试", color = Color(0xFFFF6B6B), fontSize = 12.sp)
                 }
             }
         },
         confirmButton = {
-            TextButton(
-                enabled = !downloading,
-                onClick = {
-                    downloading = true
-                    CoroutineScope(Dispatchers.IO).launch {
-                        val apk = UpdateChecker.downloadApk(context, updateInfo.apkDownloadUrl) { p ->
-                            progress = p
+            if (downloading) {
+                Text(
+                    text = "下载中…",
+                    color = TextTertiary,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
+            } else {
+                Button(
+                    onClick = {
+                        downloading = true
+                        downloadFailed = false
+                        CoroutineScope(Dispatchers.IO).launch {
+                            val apk = UpdateChecker.downloadApk(context, updateInfo.apkDownloadUrl) { p ->
+                                progress = p
+                            }
+                            downloading = false
+                            if (apk != null) {
+                                UpdateChecker.dismissUpdate()
+                                UpdateChecker.installApk(context, apk)
+                            } else {
+                                downloadFailed = true
+                            }
                         }
-                        downloading = false
-                        if (apk != null) {
-                            UpdateChecker.dismissUpdate()
-                            UpdateChecker.installApk(context, apk)
-                        }
-                    }
-                }
-            ) { Text(if (downloading) "下载中…" else "立即更新") }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = SakuraPrimary)
+                ) { Text("立即更新", color = Color.White) }
+            }
         },
         dismissButton = if (!updateInfo.forceUpdate) {
             {
                 TextButton(
                     enabled = !downloading,
                     onClick = { UpdateChecker.dismissUpdate() }
-                ) { Text("稍后") }
+                ) { Text("稍后", color = TextTertiary) }
             }
         } else null
     )
