@@ -67,6 +67,9 @@ class App : Application() {
         DownloadManager.init(this, this.downloadStore())
         restoreSession()
 
+        // 启动时后台自动检查更新（发现新版本会经全局弹窗提示）
+        com.momo.app.data.update.UpdateChecker.autoCheck()
+
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
                 appScope.launch {

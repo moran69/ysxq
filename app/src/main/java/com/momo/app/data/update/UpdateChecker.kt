@@ -5,7 +5,11 @@ import android.content.Intent
 import android.util.Log
 import androidx.core.content.FileProvider
 import com.momo.app.BuildConfig
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import okhttp3.OkHttpClient
@@ -31,6 +35,27 @@ class UpdateChecker {
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS)
             .build()
+
+        // ===== 自动更新：启动时后台检查，结果经 pendingUpdate 驱动全局弹窗 =====
+        private val updateScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val pendingUpdate = MutableStateFlow<AppVersionInfo?>(null)
+        @Volatile private var dismissedVersionName = ""
+
+        /** App 启动时调用：后台检查更新，发现新版本（且未被用户点过"稍后"）则置入 pendingUpdate */
+        fun autoCheck() {
+            updateScope.launch {
+                val info = checkForUpdate() ?: return@launch
+                if (info.versionName == dismissedVersionName) return@launch
+                Log.i(TAG, "自动检查发现新版本: ${info.versionName}")
+                pendingUpdate.value = info
+            }
+        }
+
+        /** 用户点"稍后"：本次运行不再提示（同版本） */
+        fun dismissUpdate() {
+            pendingUpdate.value?.let { dismissedVersionName = it.versionName }
+            pendingUpdate.value = null
+        }
 
         suspend fun checkForUpdate(): AppVersionInfo? = withContext(Dispatchers.IO) {
             try {

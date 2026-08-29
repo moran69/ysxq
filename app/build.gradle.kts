@@ -30,8 +30,8 @@ android {
         applicationId = "com.momo.app"
         minSdk = 24
         targetSdk = 36
-        versionCode = 16007
-        versionName = "167"
+        versionCode = 16008
+        versionName = "168"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
