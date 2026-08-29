@@ -1,6 +1,7 @@
 package com.momo.app.ui.components
 
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -40,11 +41,12 @@ fun VideoCard(
         modifier = modifier
             .width(150.dp)
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = DarkCard
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.06f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
         Column {
             Box(
@@ -57,7 +59,7 @@ fun VideoCard(
                     contentDescription = video.name,
                     modifier = Modifier
                         .fillMaxSize()
-                        .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)),
+                        .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)),
                     contentScale = ContentScale.Crop
                 )
 
@@ -80,7 +82,7 @@ fun VideoCard(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .padding(6.dp),
-                        shape = RoundedCornerShape(4.dp),
+                        shape = RoundedCornerShape(6.dp),
                         color = SakuraPrimary.copy(alpha = 0.9f)
                     ) {
                         Text(
@@ -99,7 +101,7 @@ fun VideoCard(
                         modifier = Modifier
                             .align(Alignment.TopStart)
                             .padding(6.dp),
-                        shape = RoundedCornerShape(4.dp),
+                        shape = RoundedCornerShape(6.dp),
                         color = Color(0xFFFFB300).copy(alpha = 0.9f)
                     ) {
                         Text(
@@ -153,7 +155,7 @@ fun VideoGridItem(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(2f / 3f)
-                .clip(RoundedCornerShape(10.dp))
+                .clip(RoundedCornerShape(14.dp))
         ) {
             AsyncImage(
                 model = video.pic,
@@ -223,7 +225,7 @@ fun BannerItem(
         modifier = modifier
             .fillMaxWidth()
             .height(220.dp)
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(20.dp))
             .clickable(onClick = onClick)
     ) {
         AsyncImage(
@@ -253,7 +255,7 @@ fun BannerItem(
                 .padding(16.dp)
         ) {
             Surface(
-                shape = RoundedCornerShape(4.dp),
+                shape = RoundedCornerShape(6.dp),
                 color = SakuraPrimary.copy(alpha = 0.85f)
             ) {
                 Text(

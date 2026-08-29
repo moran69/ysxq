@@ -21,6 +21,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -66,7 +67,8 @@ private fun SearchBar(onSearchClick: () -> Unit) {
             .padding(horizontal = 16.dp, vertical = 8.dp)
             .clickable(onClick = onSearchClick),
         shape = RoundedCornerShape(24.dp),
-        color = DarkSurfaceVariant
+        color = DarkSurfaceVariant,
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.07f))
     ) {
         Row(
             modifier = Modifier
@@ -74,7 +76,7 @@ private fun SearchBar(onSearchClick: () -> Unit) {
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(Icons.Filled.Search, "搜索", tint = TextTertiary, modifier = Modifier.size(20.dp))
+            Icon(Icons.Filled.Search, "搜索", tint = SakuraPrimary.copy(alpha = 0.85f), modifier = Modifier.size(20.dp))
             Spacer(modifier = Modifier.width(8.dp))
             Text("搜索影片、演员、导演...", color = TextTertiary, fontSize = 14.sp)
         }

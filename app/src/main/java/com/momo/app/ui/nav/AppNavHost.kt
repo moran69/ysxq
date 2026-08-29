@@ -135,7 +135,7 @@ fun AppNavHost(
                             selectedTextColor = SakuraPrimary,
                             unselectedIconColor = TextTertiary,
                             unselectedTextColor = TextTertiary,
-                            indicatorColor = SakuraPrimary.copy(alpha = 0.15f)
+                            indicatorColor = SakuraPrimary.copy(alpha = 0.25f)
                         )
                     )
                     NavigationBarItem(
@@ -161,7 +161,7 @@ fun AppNavHost(
                             selectedTextColor = SakuraPrimary,
                             unselectedIconColor = TextTertiary,
                             unselectedTextColor = TextTertiary,
-                            indicatorColor = SakuraPrimary.copy(alpha = 0.15f)
+                            indicatorColor = SakuraPrimary.copy(alpha = 0.25f)
                         )
                     )
                     NavigationBarItem(
@@ -187,7 +187,7 @@ fun AppNavHost(
                             selectedTextColor = SakuraPrimary,
                             unselectedIconColor = TextTertiary,
                             unselectedTextColor = TextTertiary,
-                            indicatorColor = SakuraPrimary.copy(alpha = 0.15f)
+                            indicatorColor = SakuraPrimary.copy(alpha = 0.25f)
                         )
                     )
                     NavigationBarItem(
@@ -213,7 +213,7 @@ fun AppNavHost(
                             selectedTextColor = SakuraPrimary,
                             unselectedIconColor = TextTertiary,
                             unselectedTextColor = TextTertiary,
-                            indicatorColor = SakuraPrimary.copy(alpha = 0.15f)
+                            indicatorColor = SakuraPrimary.copy(alpha = 0.25f)
                         )
                     )
                     NavigationBarItem(
@@ -239,7 +239,7 @@ fun AppNavHost(
                             selectedTextColor = SakuraPrimary,
                             unselectedIconColor = TextTertiary,
                             unselectedTextColor = TextTertiary,
-                            indicatorColor = SakuraPrimary.copy(alpha = 0.15f)
+                            indicatorColor = SakuraPrimary.copy(alpha = 0.25f)
                         )
                     )
                     NavigationBarItem(
@@ -265,7 +265,7 @@ fun AppNavHost(
                             selectedTextColor = SakuraPrimary,
                             unselectedIconColor = TextTertiary,
                             unselectedTextColor = TextTertiary,
-                            indicatorColor = SakuraPrimary.copy(alpha = 0.15f)
+                            indicatorColor = SakuraPrimary.copy(alpha = 0.25f)
                         )
                     )
                 }
