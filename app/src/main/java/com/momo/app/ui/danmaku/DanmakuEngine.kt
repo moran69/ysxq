@@ -90,7 +90,11 @@ fun DanmakuOverlay(
 
     // 按时间排序 + 游标：只处理当前时刻之后到期的弹幕
     val sortedDanmaku = remember(danmakuList) { danmakuList.sortedBy { it.time } }
-    var cursorIndex by remember(danmakuList) { mutableIntStateOf(0) }
+    var cursorIndex by remember { mutableIntStateOf(0) }
+    // 上一帧的弹幕列表引用（区分"切集换列表"与"发送追加/重组"）
+    var lastListRef by remember { mutableStateOf<List<DanmakuItem>?>(null) }
+    // 上一帧时间戳（用于按真实帧间隔推进，保证匀速）
+    var lastMoveFrameTime by remember { mutableLongStateOf(0L) }
 
     // 上一帧位置（用于检测 seek 跳跃）
     var lastPositionMs by remember { mutableLongStateOf(-1L) }
@@ -111,15 +115,22 @@ fun DanmakuOverlay(
     LaunchedEffect(danmakuList, isPlaying, config) {
         if (!isPlaying) return@LaunchedEffect
 
-        // 重置所有状态（列表切换时）
-        processedSet.value.clear()
-        retryQueue.value.clear()
-        activeScrollDanmaku.clear()
-        activeFixedDanmaku.clear()
-        scrollTracks.clear()
-        topTracks.clear()
-        bottomTracks.clear()
-        lastPositionMs = -1L
+        // 仅在弹幕列表真正更换（如切集）时重置全部状态；
+        // 发送弹幕追加 / 暂停后恢复 都不清屏，避免弹幕集体消失
+        val isNewList = danmakuList !== lastListRef
+        lastListRef = danmakuList
+        if (isNewList) {
+            processedSet.value.clear()
+            retryQueue.value.clear()
+            activeScrollDanmaku.clear()
+            activeFixedDanmaku.clear()
+            scrollTracks.clear()
+            topTracks.clear()
+            bottomTracks.clear()
+            lastPositionMs = -1L
+            cursorIndex = 0
+        }
+        lastMoveFrameTime = 0L
 
         while (isActive) {
             val now = currentPositionMs
@@ -225,13 +236,16 @@ fun DanmakuOverlay(
                 // added=false 时已加入 retryQueue，由重试队列处理
             }
 
-            // 更新滚动弹幕位置
+            // 更新滚动弹幕位置：按实际帧间隔推进（匀速），帧率波动/掉帧不再导致忽快忽慢
             val moveSpeed = with(density) {
                 val scrollDurationSec = 8f * config.speedFactor
                 viewportWidth / scrollDurationSec
             }
-            val deltaMs = 16L // 约 60fps
-            val deltaPx = moveSpeed * (deltaMs / 1000f)
+            val frameDeltaMs = if (lastMoveFrameTime > 0L) {
+                (frameTime - lastMoveFrameTime).coerceIn(1L, 100L)
+            } else 16L
+            lastMoveFrameTime = frameTime
+            val deltaPx = moveSpeed * (frameDeltaMs / 1000f)
 
             val iter = activeScrollDanmaku.iterator()
             while (iter.hasNext()) {
@@ -257,7 +271,7 @@ fun DanmakuOverlay(
                 }
             }
 
-            delay(deltaMs)
+            delay(16)
         }
     }
 
