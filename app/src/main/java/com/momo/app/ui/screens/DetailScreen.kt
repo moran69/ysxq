@@ -1774,28 +1774,8 @@ private fun FullscreenPlayer(
                                     waitForUpOrCancellation()
                                     onTogglePlayPause()
                                 } else {
-                                    // 单击: 左侧 1/4 快退10秒, 右侧 1/4 快进10秒, 中间切控制栏
-                                    val tapX = firstUp.position.x
-                                    when {
-                                        tapX < size.width / 4f -> {
-                                            val target = (exoPlayer.currentPosition - 10_000L)
-                                                .coerceAtLeast(0L)
-                                            exoPlayer.seekTo(target)
-                                            onSeekCompleted()
-                                            tapSeekDelta = -10_000L
-                                            showTapSeekHint = true
-                                        }
-                                        tapX > size.width * 3f / 4f -> {
-                                            val max = exoPlayer.duration.coerceAtLeast(0L)
-                                            val target = (exoPlayer.currentPosition + 10_000L)
-                                                .coerceAtMost(if (max > 0) max else Long.MAX_VALUE)
-                                            exoPlayer.seekTo(target)
-                                            onSeekCompleted()
-                                            tapSeekDelta = 10_000L
-                                            showTapSeekHint = true
-                                        }
-                                        else -> onToggleControls()
-                                    }
+                                    // 单击：切换控制栏（不分区触发±10s，避免误触跳进度）
+                                    onToggleControls()
                                 }
                             }
                         }
