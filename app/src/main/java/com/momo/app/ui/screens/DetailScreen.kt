@@ -27,6 +27,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -53,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -1323,7 +1325,7 @@ fun DetailScreen(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .align(Alignment.BottomStart)
-                                            .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.6f))))
+                                            .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.72f))))
                                             .padding(horizontal = 8.dp, vertical = 4.dp)
                                     ) {
                                         SeekableProgressControl(exoPlayer = exoPlayer, compact = true, mediaLoaded = hasMediaLoaded || currentUrl != null, onSeekingChanged = { isProgressSeeking = it }, onSeekCompleted = { userRequestedPlay = true; saveWatchProgress() })
@@ -1990,7 +1992,7 @@ private fun FullscreenPlayer(
                     modifier = Modifier
                         .fillMaxWidth()
                         .align(Alignment.TopStart)
-                        .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.6f), Color.Transparent)))
+                        .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.72f), Color.Transparent)))
                         .padding(horizontal = 4.dp, vertical = 4.dp)
                 ) {
                     // B站风格弹幕发送输入栏
@@ -2003,7 +2005,7 @@ private fun FullscreenPlayer(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = onExitFullscreen, modifier = Modifier.size(40.dp)) {
+                        IconButton(onClick = onExitFullscreen, modifier = Modifier.size(40.dp).background(Color.Black.copy(alpha = 0.35f), CircleShape)) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, "退出全屏", tint = Color.White, modifier = Modifier.size(24.dp))
                         }
                         Column(modifier = Modifier.weight(1f).padding(horizontal = 4.dp)) {
@@ -2058,6 +2060,7 @@ private fun FullscreenPlayer(
                                 },
                                 modifier = Modifier
                                     .size(50.dp)
+                                    .shadow(4.dp, CircleShape)
                                     .background(Color.Black.copy(alpha = 0.35f), CircleShape)
                                     .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
                             ) {
@@ -2068,6 +2071,7 @@ private fun FullscreenPlayer(
                                 onClick = onTogglePlayPause,
                                 modifier = Modifier
                                     .size(68.dp)
+                                    .shadow(6.dp, CircleShape)
                                     .background(Color.Black.copy(alpha = 0.5f), CircleShape)
                                     .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
                             ) {
@@ -2089,6 +2093,7 @@ private fun FullscreenPlayer(
                                 },
                                 modifier = Modifier
                                     .size(50.dp)
+                                    .shadow(4.dp, CircleShape)
                                     .background(Color.Black.copy(alpha = 0.35f), CircleShape)
                                     .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
                             ) {
@@ -2103,7 +2108,7 @@ private fun FullscreenPlayer(
                         modifier = Modifier
                             .fillMaxWidth()
                             .align(Alignment.BottomStart)
-                            .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.6f))))
+                            .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.72f))))
                             .padding(horizontal = 4.dp, vertical = 2.dp)
                     ) {
                         Row(
@@ -2309,18 +2314,19 @@ private fun SeekableProgressControl(exoPlayer: ExoPlayer, compact: Boolean = fal
                             .fillMaxWidth()
                             .height(trackHeight)
                             .clip(RoundedCornerShape(trackHeight / 2)),
-                        color = Color.White.copy(alpha = 0.2f),
+                        color = Color.White.copy(alpha = 0.22f),
                         trackColor = Color.White.copy(alpha = 0.1f)
                     )
                 }
+                // 主题粉进度条（呼应弹幕主题色）
                 LinearProgressIndicator(
                     progress = { progress },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(trackHeight)
                         .clip(RoundedCornerShape(trackHeight / 2)),
-                    color = Color.White,
-                    trackColor = Color.White.copy(alpha = 0.25f)
+                    color = Color(0xFFFB7299),
+                    trackColor = Color.White.copy(alpha = 0.22f)
                 )
                 if (showThumb) {
                     Box(
@@ -2330,7 +2336,9 @@ private fun SeekableProgressControl(exoPlayer: ExoPlayer, compact: Boolean = fal
                         Box(
                             modifier = Modifier
                                 .size(thumbSize)
+                                .shadow(3.dp, CircleShape)
                                 .background(Color.White, CircleShape)
+                                .border(2.dp, Color(0xFFFB7299), CircleShape)
                         )
                     }
                 }
@@ -2572,6 +2580,7 @@ private fun InlinePlayerGestureOverlay(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SpeedSelectionDialog(
     currentSpeed: Float,
@@ -2579,43 +2588,39 @@ private fun SpeedSelectionDialog(
     onDismiss: () -> Unit
 ) {
     val speeds = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 3.0f)
-    AlertDialog(
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = DarkSurface,
-        title = { Text("选择播放速度", color = TextPrimary, fontWeight = FontWeight.Bold) },
-        text = {
-            Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 30.dp)
+        ) {
+            Text("播放倍速", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(14.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+            ) {
                 speeds.forEach { speed ->
                     val selected = abs(speed - currentSpeed) < 0.01f
                     Surface(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 2.dp)
-                            .clickable { onSpeedSelected(speed) },
-                        shape = RoundedCornerShape(8.dp),
-                        color = if (selected) SakuraPrimary.copy(alpha = 0.2f) else Color.Transparent
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (selected) SakuraPrimary else DarkSurfaceVariant,
+                        modifier = Modifier.clickable { onSpeedSelected(speed) }
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                if (speed == 1.0f) "正常" else "${speed}x",
-                                color = if (selected) SakuraPrimary else TextSecondary,
-                                fontSize = 14.sp,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                modifier = Modifier.weight(1f)
-                            )
-                            if (selected) {
-                                Icon(Icons.Filled.Check, null, tint = SakuraPrimary, modifier = Modifier.size(18.dp))
-                            }
-                        }
+                        Text(
+                            if (speed == 1.0f) "正常" else "${speed}x",
+                            color = if (selected) Color.White else TextSecondary,
+                            fontSize = 14.sp,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
+                        )
                     }
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("取消", color = TextTertiary) } }
-    )
+        }
+    }
 }
 
 private fun formatDuration(ms: Long): String {
@@ -2830,7 +2835,7 @@ private fun PlayerChip(
         modifier = Modifier.clickable(onClick = onClick),
         shape = RoundedCornerShape(16.dp),
         color = if (active) SakuraPrimary.copy(alpha = 0.22f) else Color.Black.copy(alpha = 0.45f),
-        border = if (active) BorderStroke(1.dp, SakuraPrimary.copy(alpha = 0.55f)) else null
+        border = if (active) BorderStroke(1.dp, SakuraPrimary.copy(alpha = 0.6f)) else BorderStroke(1.dp, Color.White.copy(alpha = 0.14f))
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),

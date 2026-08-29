@@ -18,6 +18,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -39,6 +40,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -853,7 +855,13 @@ private fun LocalSeekableProgressControl(
                         modifier = Modifier.fillMaxWidth(progress.coerceAtLeast(0.01f)),
                         contentAlignment = Alignment.CenterEnd
                     ) {
-                        Box(modifier = Modifier.size(thumbSize).background(SakuraPrimary, CircleShape))
+                        Box(
+                            modifier = Modifier
+                                .size(thumbSize)
+                                .shadow(3.dp, CircleShape)
+                                .background(Color.White, CircleShape)
+                                .border(2.dp, SakuraPrimary, CircleShape)
+                        )
                     }
                 }
             }
@@ -1259,40 +1267,46 @@ private fun LocalFullscreenPlayer(
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun LocalSpeedSelectionDialog(
     currentSpeed: Float,
     onSpeedSelected: (Float) -> Unit,
     onDismiss: () -> Unit
 ) {
     val speeds = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 3.0f)
-    AlertDialog(
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
         containerColor = DarkSurface,
-        title = { Text("选择播放速度", color = TextPrimary, fontWeight = FontWeight.Bold) },
-        text = {
-            Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 30.dp)
+        ) {
+            Text("播放倍速", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(14.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+            ) {
                 speeds.forEach { speed ->
                     val selected = abs(speed - currentSpeed) < 0.01f
                     Surface(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp).clickable { onSpeedSelected(speed) },
-                        shape = RoundedCornerShape(8.dp),
-                        color = if (selected) SakuraPrimary.copy(alpha = 0.2f) else Color.Transparent
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (selected) SakuraPrimary else DarkSurfaceVariant,
+                        modifier = Modifier.clickable { onSpeedSelected(speed) }
                     ) {
-                        Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                if (speed == 1.0f) "正常" else "${speed}x",
-                                color = if (selected) SakuraPrimary else TextSecondary,
-                                fontSize = 14.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                modifier = Modifier.weight(1f)
-                            )
-                            if (selected) { Icon(Icons.Filled.Check, null, tint = SakuraPrimary, modifier = Modifier.size(18.dp)) }
-                        }
+                        Text(
+                            if (speed == 1.0f) "正常" else "${speed}x",
+                            color = if (selected) Color.White else TextSecondary,
+                            fontSize = 14.sp,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
+                        )
                     }
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("取消", color = TextTertiary) } }
-    )
+        }
+    }
 }
 
 @Composable
