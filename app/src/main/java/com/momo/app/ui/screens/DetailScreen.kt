@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.media.AudioManager
 import android.os.Build
 import android.provider.Settings
 import android.view.KeyEvent
@@ -15,10 +16,13 @@ import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -52,6 +56,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -120,6 +125,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 private suspend fun searchDlnaDevices(context: Context): List<DLNACast.Device> {
     val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
@@ -1217,7 +1223,11 @@ fun DetailScreen(
             }
         }
 
-        if (!isLocked && (showControls || !isPlaying)) {
+        androidx.compose.animation.AnimatedVisibility(
+            visible = !isLocked && (showControls || !isPlaying),
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
                                 Box(modifier = Modifier.fillMaxSize()) {
                                     // 顶部信息条: 剧名 + 集数
                                     Column(
@@ -1254,20 +1264,7 @@ fun DetailScreen(
                                             .padding(8.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Surface(
-                                            modifier = Modifier.clickable { showCastSheet = true },
-                                            shape = RoundedCornerShape(14.dp),
-                                            color = Color.Black.copy(alpha = 0.5f)
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Icon(Icons.Outlined.Cast, null, tint = Color.White, modifier = Modifier.size(14.dp))
-                                                Spacer(modifier = Modifier.width(3.dp))
-                                                Text("投屏", color = Color.White, fontSize = 11.sp)
-                                            }
-                                        }
+                                        PlayerChip(icon = Icons.Outlined.Cast, text = "投屏", onClick = { showCastSheet = true })
                                     }
 
                                     if (currentUrl != null && hasMediaLoaded && !isBuffering) {
@@ -1275,14 +1272,20 @@ fun DetailScreen(
                                             if (isPlaying) {
                                                 IconButton(
                                                     onClick = { exoPlayer.pause() },
-                                                    modifier = Modifier.size(48.dp).background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                                                    modifier = Modifier
+                                                        .size(52.dp)
+                                                        .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                                                        .border(1.dp, Color.White.copy(alpha = 0.2f), CircleShape)
                                                 ) {
                                                     Icon(Icons.Filled.Pause, null, tint = Color.White, modifier = Modifier.size(32.dp))
                                                 }
                                             } else {
                                                 IconButton(
                                                     onClick = { togglePlayPause() },
-                                                    modifier = Modifier.size(48.dp).background(Color.White.copy(alpha = 0.15f), CircleShape)
+                                                    modifier = Modifier
+                                                        .size(52.dp)
+                                                        .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                                                        .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
                                                 ) {
                                                     Icon(Icons.Filled.PlayArrow, null, tint = Color.White, modifier = Modifier.size(32.dp))
                                                 }
@@ -1643,7 +1646,9 @@ private fun FullscreenPlayer(
                     if (isLocked) return@pointerInput
                     detectDragGestures(
                         onDragStart = { offset ->
-                            gestureVolume = exoPlayer.volume
+                            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                            gestureVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() /
+                                audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
                             val winBrightness = activity?.window?.attributes?.screenBrightness
                             gestureBrightness = if (winBrightness != null && winBrightness >= 0f) {
                                 winBrightness
@@ -1676,8 +1681,15 @@ private fun FullscreenPlayer(
                                 // 垂直滑动: 音量/亮度 (右侧音量, 左侧亮度)
                                 val delta = -dragAmount.y / size.height
                                 if (change.position.x > size.width / 2) {
+                                    // 右半屏上下滑: 调系统媒体音量（与音量键一致，跨会话记忆）
+                                    val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                                    val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
                                     gestureVolume = (gestureVolume + delta * 2f).coerceIn(0f, 1f)
-                                    exoPlayer.volume = gestureVolume
+                                    audioManager.setStreamVolume(
+                                        AudioManager.STREAM_MUSIC,
+                                        (gestureVolume * maxVol).roundToInt().coerceIn(0, maxVol),
+                                        0
+                                    )
                                     showVolumeIndicator = true
                                 } else {
                                     gestureBrightness = (gestureBrightness + delta * 2f).coerceIn(0f, 1f)
@@ -1761,21 +1773,21 @@ private fun FullscreenPlayer(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
                     .padding(end = 24.dp)
-                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
                         if (gestureVolume < 0.01f) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
-                        null, tint = Color.White, modifier = Modifier.size(18.dp)
+                        null, tint = Color.White, modifier = Modifier.size(20.dp)
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
                     Box(
                         modifier = Modifier
-                            .width(3.dp)
-                            .height(60.dp)
-                            .background(Color.White.copy(alpha = 0.3f), RoundedCornerShape(2.dp))
+                            .width(4.dp)
+                            .height(72.dp)
+                            .background(Color.White.copy(alpha = 0.25f), RoundedCornerShape(2.dp))
                     ) {
                         Box(
                             modifier = Modifier
@@ -1785,8 +1797,8 @@ private fun FullscreenPlayer(
                                 .background(SakuraPrimary, RoundedCornerShape(2.dp))
                         )
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text("${(gestureVolume * 100).toInt()}%", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text("${(gestureVolume * 100).toInt()}%", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -1796,21 +1808,21 @@ private fun FullscreenPlayer(
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     .padding(start = 24.dp)
-                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
                         if (gestureBrightness < 0.01f) Icons.Filled.BrightnessLow else Icons.Filled.BrightnessHigh,
-                        null, tint = Color.White, modifier = Modifier.size(18.dp)
+                        null, tint = Color.White, modifier = Modifier.size(20.dp)
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
                     Box(
                         modifier = Modifier
-                            .width(3.dp)
-                            .height(60.dp)
-                            .background(Color.White.copy(alpha = 0.3f), RoundedCornerShape(2.dp))
+                            .width(4.dp)
+                            .height(72.dp)
+                            .background(Color.White.copy(alpha = 0.25f), RoundedCornerShape(2.dp))
                     ) {
                         Box(
                             modifier = Modifier
@@ -1820,8 +1832,8 @@ private fun FullscreenPlayer(
                                 .background(Color.White, RoundedCornerShape(2.dp))
                         )
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text("${(gestureBrightness * 100).toInt()}%", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text("${(gestureBrightness * 100).toInt()}%", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -1832,20 +1844,34 @@ private fun FullscreenPlayer(
             Box(
                 modifier = Modifier
                     .align(Alignment.Center)
-                    .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(10.dp))
+                    .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
                     .padding(horizontal = 18.dp, vertical = 12.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         if (target < exoPlayer.currentPosition) Icons.Filled.SkipPrevious else Icons.Filled.SkipNext,
-                        null, tint = Color.White, modifier = Modifier.size(20.dp)
+                        null,
+                        tint = SakuraPrimary,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .background(Color.White.copy(alpha = 0.12f), CircleShape)
+                            .padding(4.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        "${formatDuration(target)} / ${formatDuration(totalDuration)}",
-                        color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold
-                    )
+                    Column {
+                        Text(
+                            "${formatDuration(target)} / ${formatDuration(totalDuration)}",
+                            color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold
+                        )
+                        val deltaSec = (target - exoPlayer.currentPosition) / 1000
+                        if (deltaSec != 0L) {
+                            Text(
+                                (if (deltaSec > 0) "+" else "-") + formatDuration(abs(deltaSec) * 1000),
+                                color = SakuraPrimary, fontSize = 12.sp, fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -1858,19 +1884,24 @@ private fun FullscreenPlayer(
             Box(
                 modifier = Modifier
                     .align(Alignment.Center)
-                    .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(10.dp))
+                    .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
                     .padding(horizontal = 18.dp, vertical = 12.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         if (tapSeekDelta > 0) Icons.Filled.SkipNext else Icons.Filled.SkipPrevious,
-                        null, tint = Color.White, modifier = Modifier.size(20.dp)
+                        null,
+                        tint = SakuraPrimary,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .background(Color.White.copy(alpha = 0.12f), CircleShape)
+                            .padding(4.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        if (tapSeekDelta > 0) "+10 秒" else "-10 秒",
-                        color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold
+                        if (tapSeekDelta > 0) "快进 10 秒" else "快退 10 秒",
+                        color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold
                     )
                 }
             }
@@ -1881,11 +1912,15 @@ private fun FullscreenPlayer(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .padding(top = 80.dp)
-                    .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+                    .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(20.dp))
                     .padding(horizontal = 16.dp, vertical = 8.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Text("长按2倍加速中", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Speed, null, tint = SakuraPrimary, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("2倍速播放中", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
 
@@ -1912,7 +1947,11 @@ private fun FullscreenPlayer(
             }
         }
 
-        if (showControls || !isPlaying) {
+        AnimatedVisibility(
+            visible = showControls || !isPlaying,
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 Column(
                     modifier = Modifier
@@ -1941,37 +1980,14 @@ private fun FullscreenPlayer(
                             }
                         }
                         if (!isLocked) {
-                            Surface(
-                                modifier = Modifier.clickable(onClick = onCastClick),
-                                shape = RoundedCornerShape(14.dp),
-                                color = Color.Black.copy(alpha = 0.5f)
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(Icons.Outlined.Cast, null, tint = Color.White, modifier = Modifier.size(14.dp))
-                                    Spacer(modifier = Modifier.width(3.dp))
-                                    Text("投屏", color = Color.White, fontSize = 11.sp)
-                                }
-                            }
+                            PlayerChip(icon = Icons.Outlined.Cast, text = "投屏", onClick = onCastClick)
                             // B站风格弹幕发送按钮
-                            Surface(
-                                modifier = Modifier.clickable {
-                                    showDanmakuInput = !showDanmakuInput
-                                },
-                                shape = RoundedCornerShape(14.dp),
-                                color = Color(0xFFFB7299).copy(alpha = 0.8f)
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(Icons.Filled.Edit, null, tint = Color.White, modifier = Modifier.size(14.dp))
-                                    Spacer(modifier = Modifier.width(3.dp))
-                                    Text("发弹幕", color = Color.White, fontSize = 11.sp)
-                                }
-                            }
+                            PlayerChip(
+                                icon = Icons.Filled.Edit,
+                                text = "发弹幕",
+                                active = showDanmakuInput,
+                                onClick = { showDanmakuInput = !showDanmakuInput }
+                            )
                         }
                     }
                 }
@@ -1981,8 +1997,9 @@ private fun FullscreenPlayer(
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
                         .padding(end = 16.dp)
-                        .size(40.dp)
-                        .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                        .size(44.dp)
+                        .background(Color.Black.copy(alpha = 0.45f), CircleShape)
+                        .border(1.dp, Color.White.copy(alpha = 0.18f), CircleShape)
                 ) {
                     Icon(
                         if (isLocked) Icons.Filled.Lock else Icons.Filled.LockOpen,
@@ -1995,7 +2012,7 @@ private fun FullscreenPlayer(
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
+                            horizontalArrangement = Arrangement.spacedBy(28.dp)
                         ) {
                             // 快退 10 秒
                             IconButton(
@@ -2006,14 +2023,20 @@ private fun FullscreenPlayer(
                                     tapSeekDelta = -10_000L
                                     showTapSeekHint = true
                                 },
-                                modifier = Modifier.size(46.dp).background(Color.Black.copy(alpha = 0.35f), CircleShape)
+                                modifier = Modifier
+                                    .size(50.dp)
+                                    .background(Color.Black.copy(alpha = 0.35f), CircleShape)
+                                    .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
                             ) {
-                                Icon(Icons.Filled.Replay10, "快退10秒", tint = Color.White, modifier = Modifier.size(26.dp))
+                                Icon(Icons.Filled.Replay10, "快退10秒", tint = Color.White, modifier = Modifier.size(28.dp))
                             }
                             // 播放/暂停 主按钮
                             IconButton(
                                 onClick = onTogglePlayPause,
-                                modifier = Modifier.size(60.dp).background(Color.Black.copy(alpha = 0.45f), CircleShape)
+                                modifier = Modifier
+                                    .size(68.dp)
+                                    .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                    .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
                             ) {
                                 Icon(
                                     if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
@@ -2031,9 +2054,12 @@ private fun FullscreenPlayer(
                                     tapSeekDelta = 10_000L
                                     showTapSeekHint = true
                                 },
-                                modifier = Modifier.size(46.dp).background(Color.Black.copy(alpha = 0.35f), CircleShape)
+                                modifier = Modifier
+                                    .size(50.dp)
+                                    .background(Color.Black.copy(alpha = 0.35f), CircleShape)
+                                    .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
                             ) {
-                                Icon(Icons.Filled.Forward10, "快进10秒", tint = Color.White, modifier = Modifier.size(26.dp))
+                                Icon(Icons.Filled.Forward10, "快进10秒", tint = Color.White, modifier = Modifier.size(28.dp))
                             }
                         }
                     }
@@ -2074,32 +2100,15 @@ private fun FullscreenPlayer(
                                 }
                             }
                             // B站风格弹幕开关按钮
-                            Surface(
-                                modifier = Modifier.clickable {
+                            PlayerChip(
+                                icon = Icons.Filled.Subtitles,
+                                text = "弹幕",
+                                active = localDanmakuConfig.enabled,
+                                onClick = {
                                     localDanmakuConfig = localDanmakuConfig.copy(enabled = !localDanmakuConfig.enabled)
                                     onDanmakuConfigChange(localDanmakuConfig)
-                                },
-                                shape = RoundedCornerShape(14.dp),
-                                color = Color.Black.copy(alpha = 0.5f)
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        Icons.Filled.Subtitles,
-                                        null,
-                                        tint = if (localDanmakuConfig.enabled) Color(0xFFFB7299) else Color.White.copy(alpha = 0.5f),
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        "弹幕",
-                                        color = if (localDanmakuConfig.enabled) Color(0xFFFB7299) else Color.White.copy(alpha = 0.5f),
-                                        fontSize = 12.sp
-                                    )
                                 }
-                            }
+                            )
                             // B站风格弹幕设置按钮
                             IconButton(
                                 onClick = { showDanmakuSettings = true },
@@ -2113,49 +2122,23 @@ private fun FullscreenPlayer(
                                 )
                             }
                             Spacer(modifier = Modifier.weight(1f))
-                            Surface(
-                                modifier = Modifier.clickable(onClick = onEpisodePickerClick),
-                                shape = RoundedCornerShape(14.dp),
-                                color = Color.Black.copy(alpha = 0.5f)
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(Icons.AutoMirrored.Filled.ListAlt, null, tint = Color.White, modifier = Modifier.size(14.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("选集", color = Color.White, fontSize = 12.sp)
-                                }
-                            }
-                            Surface(
-                                modifier = Modifier.clickable(onClick = onSpeedClick),
-                                shape = RoundedCornerShape(14.dp),
-                                color = Color.Black.copy(alpha = 0.5f)
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(Icons.Filled.Speed, null, tint = Color.White, modifier = Modifier.size(14.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("倍速", color = Color.White, fontSize = 12.sp)
-                                }
-                            }
+                            PlayerChip(
+                                icon = Icons.AutoMirrored.Filled.ListAlt,
+                                text = "选集",
+                                onClick = onEpisodePickerClick
+                            )
+                            PlayerChip(
+                                icon = Icons.Filled.Speed,
+                                text = "倍速",
+                                onClick = onSpeedClick
+                            )
                             // Subtitle button
-                            Surface(
-                                modifier = Modifier.clickable(onClick = { showSubtitleDialog = true }),
-                                shape = RoundedCornerShape(14.dp),
-                                color = Color.Black.copy(alpha = 0.5f)
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(Icons.Filled.Subtitles, null, tint = if (subtitleTrackCount > 0) SakuraPrimary else Color.White.copy(alpha = 0.5f), modifier = Modifier.size(14.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("字幕", color = if (subtitleTrackCount > 0) SakuraPrimary else Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
-                                }
-                            }
+                            PlayerChip(
+                                icon = Icons.Filled.Subtitles,
+                                text = "字幕",
+                                active = subtitleTrackCount > 0,
+                                onClick = { showSubtitleDialog = true }
+                            )
                             IconButton(onClick = onExitFullscreen, modifier = Modifier.size(32.dp)) {
                                 Icon(Icons.Filled.FullscreenExit, "退出全屏", tint = Color.White, modifier = Modifier.size(20.dp))
                             }
@@ -2202,7 +2185,7 @@ private fun SeekableProgressControl(exoPlayer: ExoPlayer, compact: Boolean = fal
                 currentDuration = exoPlayer.duration.coerceAtLeast(0L)
                 bufferedFraction = (exoPlayer.bufferedPercentage / 100f).coerceIn(0f, 1f)
             }
-            delay(1000)
+            delay(500)
         }
     }
 
@@ -2214,93 +2197,114 @@ private fun SeekableProgressControl(exoPlayer: ExoPlayer, compact: Boolean = fal
         else (tick.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
 
     val showThumb = mediaLoaded && (isDurationValid || exoPlayer.currentMediaItem != null)
-    val trackHeight = if (compact) 2.dp else 3.dp
+    val trackHeight = if (compact) 3.dp else 4.dp
+    val thumbSize by animateDpAsState(
+        targetValue = if (isSeeking) (if (compact) 14.dp else 16.dp) else (if (compact) 10.dp else 12.dp),
+        label = "seekThumb"
+    )
 
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(formatDuration(if (isSeeking) (seekFraction * duration).toLong().coerceAtLeast(0L) else tick.coerceAtLeast(0L)),
-            color = Color.White, fontSize = if (compact) 10.sp else 11.sp)
-        Spacer(modifier = Modifier.width(6.dp))
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .height(36.dp)  // 增大触摸区域，视觉条高度不变
-                .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = { offset ->
-                            isSeeking = true
-                            // 不跳到触摸位置，而是记录当前播放进度作为起点
-                            val liveDuration = exoPlayer.duration.coerceAtLeast(0L)
-                            dragStartFraction = if (liveDuration > 0) {
-                                (exoPlayer.currentPosition.toFloat() / liveDuration.toFloat()).coerceIn(0f, 1f)
-                            } else 0f
-                            seekFraction = dragStartFraction
-                            dragStartX = offset.x
-                        },
-                        onDrag = { change, _ ->
-                            change.consume()
-                            // delta 方式：进度变化 = 拖拽位移 × 灵敏度，不直接映射到绝对位置
-                            val deltaFraction = (change.position.x - dragStartX) / size.width * seekSensitivity
-                            seekFraction = (dragStartFraction + deltaFraction).coerceIn(0f, 1f)
-                        },
-                        onDragEnd = {
-                            isSeeking = false
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // 拖动时的时间预览气泡
+        if (isSeeking && isDurationValid) {
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text(
+                    formatDuration((seekFraction * duration).toLong()),
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 10.dp, vertical = 3.dp)
+                )
+            }
+            Spacer(modifier = Modifier.height(3.dp))
+        }
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(formatDuration(if (isSeeking) (seekFraction * duration).toLong().coerceAtLeast(0L) else tick.coerceAtLeast(0L)),
+                color = Color.White, fontSize = if (compact) 11.sp else 12.sp, fontWeight = FontWeight.Medium)
+            Spacer(modifier = Modifier.width(6.dp))
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(36.dp)  // 增大触摸区域，视觉条高度不变
+                    .pointerInput(Unit) {
+                        detectDragGestures(
+                            onDragStart = { offset ->
+                                isSeeking = true
+                                // 不跳到触摸位置，而是记录当前播放进度作为起点
+                                val liveDuration = exoPlayer.duration.coerceAtLeast(0L)
+                                dragStartFraction = if (liveDuration > 0) {
+                                    (exoPlayer.currentPosition.toFloat() / liveDuration.toFloat()).coerceIn(0f, 1f)
+                                } else 0f
+                                seekFraction = dragStartFraction
+                                dragStartX = offset.x
+                            },
+                            onDrag = { change, _ ->
+                                change.consume()
+                                // delta 方式：进度变化 = 拖拽位移 × 灵敏度，不直接映射到绝对位置
+                                val deltaFraction = (change.position.x - dragStartX) / size.width * seekSensitivity
+                                seekFraction = (dragStartFraction + deltaFraction).coerceIn(0f, 1f)
+                            },
+                            onDragEnd = {
+                                isSeeking = false
+                                val liveDuration = exoPlayer.duration.coerceAtLeast(0L)
+                                if (liveDuration > 0) {
+                                    exoPlayer.seekTo((seekFraction * liveDuration).toLong())
+                                    onSeekCompleted?.invoke()
+                                }
+                            },
+                            onDragCancel = { isSeeking = false }
+                        )
+                    }
+                    .pointerInput(Unit) {
+                        detectTapGestures { offset ->
+                            val fraction = (offset.x / size.width).coerceIn(0f, 1f)
                             val liveDuration = exoPlayer.duration.coerceAtLeast(0L)
                             if (liveDuration > 0) {
-                                exoPlayer.seekTo((seekFraction * liveDuration).toLong())
+                                exoPlayer.seekTo((fraction * liveDuration).toLong())
                                 onSeekCompleted?.invoke()
                             }
-                        },
-                        onDragCancel = { isSeeking = false }
+                        }
+                    },
+                contentAlignment = Alignment.CenterStart
+            ) {
+                // Buffered progress (light gray behind play progress)
+                if (bufferedFraction > progress) {
+                    LinearProgressIndicator(
+                        progress = { bufferedFraction },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(trackHeight)
+                            .clip(RoundedCornerShape(trackHeight / 2)),
+                        color = Color.White.copy(alpha = 0.2f),
+                        trackColor = Color.White.copy(alpha = 0.1f)
                     )
                 }
-                .pointerInput(Unit) {
-                    detectTapGestures { offset ->
-                        val fraction = (offset.x / size.width).coerceIn(0f, 1f)
-                        val liveDuration = exoPlayer.duration.coerceAtLeast(0L)
-                        if (liveDuration > 0) {
-                            exoPlayer.seekTo((fraction * liveDuration).toLong())
-                            onSeekCompleted?.invoke()
-                        }
-                    }
-                },
-            contentAlignment = Alignment.CenterStart
-        ) {
-            // Buffered progress (light gray behind play progress)
-            if (bufferedFraction > progress) {
                 LinearProgressIndicator(
-                    progress = { bufferedFraction },
+                    progress = { progress },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(trackHeight)
                         .clip(RoundedCornerShape(trackHeight / 2)),
-                    color = Color.White.copy(alpha = 0.2f),
-                    trackColor = Color.White.copy(alpha = 0.1f)
+                    color = Color.White,
+                    trackColor = Color.White.copy(alpha = 0.25f)
                 )
-            }
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(trackHeight)
-                    .clip(RoundedCornerShape(trackHeight / 2)),
-                color = Color.White,
-                trackColor = Color.White.copy(alpha = 0.3f)
-            )
-            if (showThumb) {
-                Box(
-                    modifier = Modifier.fillMaxWidth(progress.coerceAtLeast(0.01f)),
-                    contentAlignment = Alignment.CenterEnd
-                ) {
+                if (showThumb) {
                     Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .background(Color.White, CircleShape)
-                    )
+                        modifier = Modifier.fillMaxWidth(progress.coerceAtLeast(0.01f)),
+                        contentAlignment = Alignment.CenterEnd
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(thumbSize)
+                                .background(Color.White, CircleShape)
+                        )
+                    }
                 }
             }
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(formatDuration(duration), color = Color.White.copy(alpha = 0.7f), fontSize = if (compact) 11.sp else 12.sp)
         }
-        Spacer(modifier = Modifier.width(6.dp))
-        Text(formatDuration(duration), color = Color.White.copy(alpha = 0.7f), fontSize = if (compact) 10.sp else 11.sp)
     }
 }
 
@@ -2338,7 +2342,9 @@ private fun InlinePlayerGestureOverlay(
                 .pointerInput(Unit) {
                     detectDragGestures(
                         onDragStart = { offset ->
-                            gestureVolume = exoPlayer.volume
+                            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                            gestureVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() /
+                                audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
                             val winBrightness = activity?.window?.attributes?.screenBrightness
                             gestureBrightness = if (winBrightness != null && winBrightness >= 0f) {
                                 winBrightness
@@ -2357,8 +2363,15 @@ private fun InlinePlayerGestureOverlay(
                             if (dragAmount.y == 0f) return@detectDragGestures
                             val delta = -dragAmount.y / size.height
                             if (change.position.x > size.width / 2) {
+                                // 右半屏上下滑: 调系统媒体音量（与音量键一致，跨会话记忆）
+                                val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                                val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
                                 gestureVolume = (gestureVolume + delta * 2f).coerceIn(0f, 1f)
-                                exoPlayer.volume = gestureVolume
+                                audioManager.setStreamVolume(
+                                    AudioManager.STREAM_MUSIC,
+                                    (gestureVolume * maxVol).roundToInt().coerceIn(0, maxVol),
+                                    0
+                                )
                                 showVolumeIndicator = true
                             } else {
                                 gestureBrightness = (gestureBrightness + delta * 2f).coerceIn(0f, 1f)
@@ -2428,21 +2441,21 @@ private fun InlinePlayerGestureOverlay(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
                     .padding(end = 24.dp)
-                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
                         if (gestureVolume < 0.01f) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
-                        null, tint = Color.White, modifier = Modifier.size(18.dp)
+                        null, tint = Color.White, modifier = Modifier.size(20.dp)
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
                     Box(
                         modifier = Modifier
-                            .width(3.dp)
-                            .height(60.dp)
-                            .background(Color.White.copy(alpha = 0.3f), RoundedCornerShape(2.dp))
+                            .width(4.dp)
+                            .height(72.dp)
+                            .background(Color.White.copy(alpha = 0.25f), RoundedCornerShape(2.dp))
                     ) {
                         Box(
                             modifier = Modifier
@@ -2452,8 +2465,8 @@ private fun InlinePlayerGestureOverlay(
                                 .background(SakuraPrimary, RoundedCornerShape(2.dp))
                         )
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text("${(gestureVolume * 100).toInt()}%", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text("${(gestureVolume * 100).toInt()}%", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -2463,21 +2476,21 @@ private fun InlinePlayerGestureOverlay(
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     .padding(start = 24.dp)
-                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                    .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
                         if (gestureBrightness < 0.01f) Icons.Filled.BrightnessLow else Icons.Filled.BrightnessHigh,
-                        null, tint = Color.White, modifier = Modifier.size(18.dp)
+                        null, tint = Color.White, modifier = Modifier.size(20.dp)
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
                     Box(
                         modifier = Modifier
-                            .width(3.dp)
-                            .height(60.dp)
-                            .background(Color.White.copy(alpha = 0.3f), RoundedCornerShape(2.dp))
+                            .width(4.dp)
+                            .height(72.dp)
+                            .background(Color.White.copy(alpha = 0.25f), RoundedCornerShape(2.dp))
                     ) {
                         Box(
                             modifier = Modifier
@@ -2487,8 +2500,8 @@ private fun InlinePlayerGestureOverlay(
                                 .background(Color.White, RoundedCornerShape(2.dp))
                         )
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text("${(gestureBrightness * 100).toInt()}%", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text("${(gestureBrightness * 100).toInt()}%", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -2501,19 +2514,24 @@ private fun InlinePlayerGestureOverlay(
             Box(
                 modifier = Modifier
                     .align(Alignment.Center)
-                    .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(10.dp))
+                    .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
                     .padding(horizontal = 18.dp, vertical = 12.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         if (tapSeekDelta > 0) Icons.Filled.SkipNext else Icons.Filled.SkipPrevious,
-                        null, tint = Color.White, modifier = Modifier.size(20.dp)
+                        null,
+                        tint = SakuraPrimary,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .background(Color.White.copy(alpha = 0.12f), CircleShape)
+                            .padding(4.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        if (tapSeekDelta > 0) "+10 秒" else "-10 秒",
-                        color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold
+                        if (tapSeekDelta > 0) "快进 10 秒" else "快退 10 秒",
+                        color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold
                     )
                 }
             }
@@ -2762,6 +2780,33 @@ private fun CastSeekBar(positionMs: Long, durationMs: Long, compact: Boolean, on
             color = Color.White.copy(alpha = 0.8f),
             fontSize = if (compact) 10.sp else 12.sp
         )
+    }
+}
+
+/**
+ * 播放器统一操作芯片：半透明胶囊底 + 图标 + 文字，active 态高亮主题色。
+ */
+@Composable
+private fun PlayerChip(
+    icon: ImageVector,
+    text: String,
+    onClick: () -> Unit,
+    active: Boolean = false
+) {
+    Surface(
+        modifier = Modifier.clickable(onClick = onClick),
+        shape = RoundedCornerShape(16.dp),
+        color = if (active) SakuraPrimary.copy(alpha = 0.22f) else Color.Black.copy(alpha = 0.45f),
+        border = if (active) BorderStroke(1.dp, SakuraPrimary.copy(alpha = 0.55f)) else null
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(icon, null, tint = if (active) SakuraPrimary else Color.White, modifier = Modifier.size(15.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(text, color = if (active) SakuraPrimary else Color.White, fontSize = 12.sp)
+        }
     }
 }
 
