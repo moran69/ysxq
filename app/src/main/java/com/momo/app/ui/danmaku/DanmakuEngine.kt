@@ -36,7 +36,8 @@ fun DanmakuOverlay(
     currentPositionMs: Long,
     isPlaying: Boolean,
     config: DanmakuConfig,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    playbackSpeed: Float = 1f
 ) {
     if (!config.enabled || danmakuList.isEmpty()) return
 
@@ -112,7 +113,7 @@ fun DanmakuOverlay(
     }
 
     // ===== 主循环 =====
-    LaunchedEffect(danmakuList, isPlaying, config) {
+    LaunchedEffect(danmakuList, isPlaying, config, playbackSpeed) {
         if (!isPlaying) return@LaunchedEffect
 
         // 仅在弹幕列表真正更换（如切集）时重置全部状态；
@@ -236,9 +237,10 @@ fun DanmakuOverlay(
                 // added=false 时已加入 retryQueue，由重试队列处理
             }
 
-            // 更新滚动弹幕位置：按实际帧间隔推进（匀速），帧率波动/掉帧不再导致忽快忽慢
+            // 更新滚动弹幕位置：按实际帧间隔推进（匀速），帧率波动/掉帧不再导致忽快忽慢；
+            // 倍速播放时弹幕同步加速（2x 播放 → 弹幕 2x 滚动）
             val moveSpeed = with(density) {
-                val scrollDurationSec = 8f * config.speedFactor
+                val scrollDurationSec = 8f * config.speedFactor / playbackSpeed.coerceIn(0.5f, 4f)
                 viewportWidth / scrollDurationSec
             }
             val frameDeltaMs = if (lastMoveFrameTime > 0L) {

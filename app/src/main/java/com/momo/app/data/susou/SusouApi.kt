@@ -51,6 +51,27 @@ object SusouApi {
         .followRedirects(true)
         .build()
 
+    // ===== 内存缓存 (TTL)：减少重复搜索/详情请求，降低被源站限流风险 =====
+    private class TtlCache {
+        private val map = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, Any?>>()
+
+        @Suppress("UNCHECKED_CAST")
+        fun <V> get(key: String, ttlMs: Long): V? {
+            val entry = map[key] ?: return null
+            if (System.currentTimeMillis() - entry.first > ttlMs) {
+                map.remove(key)
+                return null
+            }
+            return entry.second as? V
+        }
+
+        fun put(key: String, value: Any?) {
+            map[key] = System.currentTimeMillis() to value
+        }
+    }
+
+    private val ttlCache = TtlCache()
+
     // ===== 工具: MD5 =====
     private fun md5(s: String): String {
         val digest = MessageDigest.getInstance("MD5").digest(s.toByteArray())
@@ -77,6 +98,7 @@ object SusouApi {
     // ========== 1. 速搜自家: 搜索 (明文) ==========
     suspend fun search(keyword: String): List<SusouVideoItem> =
         withContext(Dispatchers.IO) {
+            ttlCache.get<List<SusouVideoItem>>("ss_$keyword", 60_000)?.let { return@withContext it }
             var lastErr: Exception? = null
             for (port in BIZ_PORTS) {
                 try {
@@ -89,7 +111,10 @@ object SusouApi {
                         .build()
                     val body = exec(request)
                     val resp = json.decodeFromString(SusouSearchResponse.serializer(), body)
-                    if (resp.code == 1 && resp.list.isNotEmpty()) return@withContext resp.list
+                    if (resp.code == 1 && resp.list.isNotEmpty()) {
+                        ttlCache.put("ss_$keyword", resp.list)
+                        return@withContext resp.list
+                    }
                 } catch (e: Exception) {
                     lastErr = e
                 }
@@ -100,6 +125,7 @@ object SusouApi {
     // ========== 2. 备用源: 搜索 (MD5 签名) ==========
     suspend fun rbotvSearch(keyword: String): List<RbotvVideoItem> =
         withContext(Dispatchers.IO) {
+            ttlCache.get<List<RbotvVideoItem>>("rbotv_$keyword", 120_000)?.let { return@withContext it }
             val ts = System.currentTimeMillis() / 1000
             val sign = md5(HS_KEY + ts)
             val form = FormBody.Builder()
@@ -116,12 +142,15 @@ object SusouApi {
                 .build()
             val body = exec(request)
             val resp = json.decodeFromString(RbotvSearchResponse.serializer(), body)
-            resp.data?.list ?: emptyList()
+            val list = resp.data?.list ?: emptyList()
+            if (list.isNotEmpty()) ttlCache.put("rbotv_$keyword", list)
+            list
         }
 
     // ========== 3. 备用源: 详情 ep 列表 (MD5 签名) ==========
     suspend fun rbotvDetail(vodId: Int): RbotvDetailData? =
         withContext(Dispatchers.IO) {
+            ttlCache.get<RbotvDetailData>("rbotvd_$vodId", 300_000)?.let { return@withContext it }
             val ts = System.currentTimeMillis() / 1000
             val sign = md5(HS_KEY + ts)
             val form = FormBody.Builder()
@@ -138,12 +167,13 @@ object SusouApi {
                 .build()
             val body = exec(request)
             val resp = json.decodeFromString(RbotvDetailResponse.serializer(), body)
-            resp.data
+            resp.data?.also { ttlCache.put("rbotvd_$vodId", it) }
         }
 
     // ========== 4. 速搜自家: weekday 周期表 (AES 解密) ==========
     suspend fun weekday(): List<SusouVideoItem> =
         withContext(Dispatchers.IO) {
+            ttlCache.get<List<SusouVideoItem>>("weekday", 300_000)?.let { return@withContext it }
             var lastErr: Exception? = null
             for (port in BIZ_PORTS) {
                 try {
@@ -156,7 +186,10 @@ object SusouApi {
                     val body = exec(request)
                     val pt = aesDecryptBase64(body)
                     val resp = json.decodeFromString(SusouSearchResponse.serializer(), pt)
-                    if (resp.code == 1 && resp.list.isNotEmpty()) return@withContext resp.list
+                    if (resp.code == 1 && resp.list.isNotEmpty()) {
+                        ttlCache.put("weekday", resp.list)
+                        return@withContext resp.list
+                    }
                 } catch (e: Exception) {
                     lastErr = e
                 }
@@ -171,6 +204,9 @@ object SusouApi {
      */
     suspend fun fetchDetailByKeyword(keyword: String): Pair<VideoItem, List<VideoSource>>? {
         return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            ttlCache.get<Pair<VideoItem, List<VideoSource>>>("fdet_$keyword", 300_000)?.let {
+                return@withContext it
+            }
             try {
                 val searchResults = rbotvSearch(keyword)
                 val target = searchResults.firstOrNull() ?: return@withContext null
@@ -205,7 +241,7 @@ object SusouApi {
                     if (eps.isEmpty()) null else VideoSource(label = friendlySourceName(pl.flag, pl.name), episodes = eps)
                 }
                 if (sources.isEmpty()) return@withContext null
-                video to sources
+                (video to sources).also { ttlCache.put("fdet_$keyword", it) }
             } catch (e: Exception) {
                 null
             }

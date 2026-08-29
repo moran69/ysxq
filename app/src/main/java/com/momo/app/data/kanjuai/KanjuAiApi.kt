@@ -68,6 +68,27 @@ object KanjuAiApi {
         .cookieJar(cookieJar)
         .build()
 
+    // ===== 内存缓存 (TTL)：首页/榜单/搜索短缓存，详情长缓存；减少重复请求与限流风险 =====
+    private class TtlCache {
+        private val map = ConcurrentHashMap<String, Pair<Long, Any?>>()
+
+        @Suppress("UNCHECKED_CAST")
+        fun <V> get(key: String, ttlMs: Long): V? {
+            val entry = map[key] ?: return null
+            if (System.currentTimeMillis() - entry.first > ttlMs) {
+                map.remove(key)
+                return null
+            }
+            return entry.second as? V
+        }
+
+        fun put(key: String, value: Any?) {
+            map[key] = System.currentTimeMillis() to value
+        }
+    }
+
+    private val ttlCache = TtlCache()
+
     // ===== HMAC-SHA256 签名 =====
     private fun signRequest(method: String, pathname: String, search: String): Triple<String, String, String> {
         val timestamp = System.currentTimeMillis().toString()
@@ -139,12 +160,15 @@ object KanjuAiApi {
 
     // ===== 0. 首页推荐 (/v1/feed/home) =====
     suspend fun homeFeed(): List<KanjuAiHomeSection> = withContext(Dispatchers.IO) {
+        ttlCache.get<List<KanjuAiHomeSection>>("kj_home", 90_000)?.let { return@withContext it }
         ensureSession()
         try {
             val search = "?scope=public&mode=preview&sections=3&cards=10&adult_confirmed=false"
             val respBody = execSignedRequest("GET", "/v1/feed/home", search)
             val resp = json.decodeFromString(KanjuAiHomeFeedResponse.serializer(), respBody)
-            resp.sections.filter { it.cards.isNotEmpty() }
+            val sections = resp.sections.filter { it.cards.isNotEmpty() }
+            if (sections.isNotEmpty()) ttlCache.put("kj_home", sections)
+            sections
         } catch (e: Exception) {
             android.util.Log.e("KanjuAiApi", "homeFeed failed", e)
             emptyList()
@@ -153,11 +177,14 @@ object KanjuAiApi {
 
     // ===== 0b. 热门榜单 (/v1/browse/catalog?sort=trending) =====
     suspend fun trending(window: String = "day", limit: Int = 20): List<KanjuAiTrendingCard> = withContext(Dispatchers.IO) {
+        val cacheKey = "kj_tr_${window}_$limit"
+        ttlCache.get<List<KanjuAiTrendingCard>>(cacheKey, 90_000)?.let { return@withContext it }
         ensureSession()
         try {
             val search = "?sort=trending&window=$window&page=1&limit=$limit"
             val respBody = execSignedRequest("GET", "/v1/browse/catalog", search)
             val resp = json.decodeFromString(KanjuAiTrendingResponse.serializer(), respBody)
+            if (resp.cards.isNotEmpty()) ttlCache.put(cacheKey, resp.cards)
             resp.cards
         } catch (e: Exception) {
             android.util.Log.e("KanjuAiApi", "trending failed", e)
@@ -167,12 +194,15 @@ object KanjuAiApi {
 
     // ===== 2. 搜索 =====
     suspend fun search(keyword: String): List<KanjuAiSuggestion> = withContext(Dispatchers.IO) {
+        ttlCache.get<List<KanjuAiSuggestion>>("kj_sug_$keyword", 60_000)?.let { return@withContext it }
         ensureSession()
         val encoded = java.net.URLEncoder.encode(keyword, "UTF-8")
         val search = "?q=$encoded&limit=20"
         val respBody = execSignedRequest("GET", "/v1/suggest", search)
         val resp = json.decodeFromString(KanjuAiSuggestResponse.serializer(), respBody)
-        resp.suggestions.filter { it.target?.variantId?.isNotBlank() == true }
+        val suggestions = resp.suggestions.filter { it.target?.variantId?.isNotBlank() == true }
+        if (suggestions.isNotEmpty()) ttlCache.put("kj_sug_$keyword", suggestions)
+        suggestions
     }
 
     // ===== 3. 详情 =====
@@ -292,6 +322,9 @@ object KanjuAiApi {
         fallbackTitle: String = ""
     ): Pair<VideoItem, List<VideoSource>>? {
         return withContext(Dispatchers.IO) {
+            ttlCache.get<Pair<VideoItem, List<VideoSource>>>("kj_det_$variantId", 300_000)?.let {
+                return@withContext it
+            }
             try {
                 val detail = getDetail(variantId) ?: return@withContext null
                 val episodes = getEpisodes(variantId) ?: return@withContext null
@@ -321,7 +354,7 @@ object KanjuAiApi {
                 if (eps.isEmpty()) return@withContext null
 
                 val sources = listOf(VideoSource(label = "看剧AI", episodes = eps))
-                video to sources
+                (video to sources).also { ttlCache.put("kj_det_$variantId", it) }
             } catch (e: Exception) {
                 android.util.Log.e("KanjuAiApi", "fetchVideoDetailByVariantId failed", e)
                 null

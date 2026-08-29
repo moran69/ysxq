@@ -3,12 +3,15 @@ package com.momo.app.ui.screens
 import android.app.Activity
 import android.content.Context
 import android.content.pm.ActivityInfo
+import android.media.AudioManager
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -64,6 +67,7 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.ui.PlayerView
 import com.yinnho.upnpcast.DLNACast
 import com.momo.app.data.download.DownloadTask
+import com.momo.app.data.proxy.DirectDlnaCaster
 import com.momo.app.data.proxy.DlnaProxyServer
 import com.momo.app.data.proxy.DlnaProxyService
 import com.momo.app.ui.theme.*
@@ -74,6 +78,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 private suspend fun searchDlnaDevices(context: Context): List<DLNACast.Device> {
     val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
@@ -122,6 +127,60 @@ fun LocalPlayerScreen(
     var castPlaybackState by remember { mutableStateOf("") }
     var showDisconnectDialog by remember { mutableStateOf(false) }
     var castCommandHandler by remember { mutableStateOf<((Int) -> Unit)?>(null) }
+    var castDevice by remember { mutableStateOf<DLNACast.Device?>(null) }
+    var castPositionMs by remember { mutableLongStateOf(0L) }
+    var castDurationMs by remember { mutableLongStateOf(0L) }
+    var castSeekHandler by remember { mutableStateOf<((Long) -> Unit)?>(null) }
+
+    // 投屏停止与遥控命令注册（此前 handler 从未注册，面板按钮全部无效——已修复）
+    val stopCasting: () -> Unit = {
+        isCasting = false
+        castDeviceName = null
+        castPlaybackState = ""
+        val dev = castDevice
+        castDevice = null
+        scope.launch(Dispatchers.IO) {
+            try { dev?.let { DirectDlnaCaster.stop(it) } } catch (_: Exception) { }
+            try { DLNACast.stop() } catch (_: Exception) { }
+            DirectDlnaCaster.clearCache()
+            try {
+                DlnaProxyService.proxyServer?.shutdown()
+                DlnaProxyService.proxyServer = null
+            } catch (_: Exception) { }
+        }
+    }
+    fun castCurrentEpisode(dev: DLNACast.Device) {
+        scope.launch {
+            try {
+                delay(600) // 等 ViewModel 切集就绪
+                val file = viewModel.state.value.currentFile ?: return@launch
+                val server = DlnaProxyService.proxyServer ?: DlnaProxyServer().also {
+                    it.start(); DlnaProxyService.proxyServer = it
+                }
+                val fileUrl = server.getLocalFileUrl(file.absolutePath)
+                DirectDlnaCaster.cast(dev, fileUrl, viewModel.state.value.videoName)
+            } catch (_: Exception) { }
+        }
+    }
+    val handleCastCommand: (Int) -> Unit = { action ->
+        when (action) {
+            0 -> stopCasting()
+            -1 -> if (state.currentEpisodeIndex > 0) {
+                viewModel.selectEpisode(state.currentEpisodeIndex - 1)
+                castDevice?.let { castCurrentEpisode(it) }
+            }
+            1 -> if (state.currentEpisodeIndex < state.episodes.size - 1) {
+                viewModel.selectEpisode(state.currentEpisodeIndex + 1)
+                castDevice?.let { castCurrentEpisode(it) }
+            }
+            2 -> scope.launch(Dispatchers.IO) { try { DirectDlnaCaster.pause() } catch (_: Exception) { } }
+            3 -> scope.launch(Dispatchers.IO) { try { DirectDlnaCaster.play() } catch (_: Exception) { } }
+        }
+    }
+    SideEffect {
+        stopCastingCallback = stopCasting
+        castCommandHandler = handleCastCommand
+    }
 
     LaunchedEffect(videoId) {
         viewModel.loadVideo(videoId, initialEpisodeIndex)
@@ -287,11 +346,15 @@ fun LocalPlayerScreen(
             while (isActive) {
                 delay(3000)
                 try {
-                    val prog = DLNACast.getProgressRealtime()
+                    val transport = DirectDlnaCaster.getTransportState() ?: "UNKNOWN"
+                    castPlaybackState = transport
+                    val prog = DirectDlnaCaster.getPositionInfo()
                     if (prog != null && (prog.first > 0 || prog.second > 0)) {
+                        castPositionMs = prog.first
+                        castDurationMs = prog.second
                         castProgress = "${formatLocalDuration(prog.first)} / ${formatLocalDuration(prog.second)}"
                     }
-                    if (DLNACast.getState().playbackState.name == "STOPPED") {
+                    if (transport == "STOPPED") {
                         isCasting = false; showDisconnectDialog = true
                     }
                 } catch (_: Exception) {}
@@ -357,8 +420,9 @@ fun LocalPlayerScreen(
             context = context,
             scope = scope,
             onDismiss = { showCastSheet = false },
-            onCastStarted = { deviceName ->
-                isCasting = true; castDeviceName = deviceName; showCastSheet = false
+            onCastStarted = { device ->
+                castDevice = device
+                isCasting = true; castDeviceName = device.name; showCastSheet = false
                 if (isFullscreen) {
                     isFullscreen = false; isLocked = false
                     activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
@@ -460,12 +524,16 @@ fun LocalPlayerScreen(
                                 videoTitle = state.videoName,
                                 episodeName = state.episodes.getOrNull(state.currentEpisodeIndex)?.episodeName ?: "",
                                 deviceName = castDeviceName ?: "设备",
-                                progress = castProgress,
+                                positionMs = castPositionMs,
+                                durationMs = castDurationMs,
+                                playbackState = castPlaybackState,
                                 currentEpisodeIndex = state.currentEpisodeIndex,
                                 totalEpisodes = state.episodes.size,
                                 onPrevEpisode = { castCommandHandler?.invoke(-1) },
                                 onStopCast = { castCommandHandler?.invoke(0) },
-                                onNextEpisode = { castCommandHandler?.invoke(1) }
+                                onNextEpisode = { castCommandHandler?.invoke(1) },
+                                onTogglePlayPause = { castCommandHandler?.invoke(if (castPlaybackState == "PLAYING") 2 else 3) },
+                                onSeek = { targetMs -> castSeekHandler?.invoke(targetMs) }
                             )
                         }
 
@@ -699,7 +767,7 @@ private fun LocalSeekableProgressControl(
                 tick = exoPlayer.currentPosition.coerceAtLeast(0L)
                 currentDuration = exoPlayer.duration.coerceAtLeast(0L)
             }
-            delay(1000)
+            delay(500)
         }
     }
 
@@ -711,66 +779,87 @@ private fun LocalSeekableProgressControl(
         else (tick.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
 
     val showThumb = mediaLoaded && (isDurationValid || exoPlayer.currentMediaItem != null)
-    val trackHeight = if (compact) 2.dp else 3.dp
+    val trackHeight = if (compact) 3.dp else 4.dp
+    val thumbSize by animateDpAsState(
+        targetValue = if (isSeeking) (if (compact) 14.dp else 16.dp) else (if (compact) 10.dp else 12.dp),
+        label = "localSeekThumb"
+    )
 
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(formatLocalDuration(if (isSeeking) (seekFraction * duration).toLong().coerceAtLeast(0L) else tick.coerceAtLeast(0L)),
-            color = Color.White, fontSize = if (compact) 10.sp else 11.sp)
-        Spacer(modifier = Modifier.width(6.dp))
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .height(20.dp)
-                .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = { offset ->
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // 拖动时的时间预览气泡
+        if (isSeeking && isDurationValid) {
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text(
+                    formatLocalDuration((seekFraction * duration).toLong()),
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 10.dp, vertical = 3.dp)
+                )
+            }
+            Spacer(modifier = Modifier.height(3.dp))
+        }
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(formatLocalDuration(if (isSeeking) (seekFraction * duration).toLong().coerceAtLeast(0L) else tick.coerceAtLeast(0L)),
+                color = Color.White, fontSize = if (compact) 10.sp else 11.sp)
+            Spacer(modifier = Modifier.width(6.dp))
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(20.dp)
+                    .pointerInput(Unit) {
+                        detectDragGestures(
+                            onDragStart = { offset ->
+                                val fraction = (offset.x / size.width).coerceIn(0f, 1f)
+                                isSeeking = true; seekFraction = fraction
+                            },
+                            onDrag = { change, _ ->
+                                change.consume()
+                                seekFraction = (change.position.x / size.width).coerceIn(0f, 1f)
+                            },
+                            onDragEnd = {
+                                isSeeking = false
+                                val liveDuration = exoPlayer.duration.coerceAtLeast(0L)
+                                if (liveDuration > 0) {
+                                    exoPlayer.seekTo((seekFraction * liveDuration).toLong())
+                                    onSeekCompleted?.invoke()
+                                }
+                            },
+                            onDragCancel = { isSeeking = false }
+                        )
+                    }
+                    .pointerInput(Unit) {
+                        detectTapGestures { offset ->
                             val fraction = (offset.x / size.width).coerceIn(0f, 1f)
-                            isSeeking = true; seekFraction = fraction
-                        },
-                        onDrag = { change, _ ->
-                            change.consume()
-                            seekFraction = (change.position.x / size.width).coerceIn(0f, 1f)
-                        },
-                        onDragEnd = {
-                            isSeeking = false
                             val liveDuration = exoPlayer.duration.coerceAtLeast(0L)
                             if (liveDuration > 0) {
-                                exoPlayer.seekTo((seekFraction * liveDuration).toLong())
+                                exoPlayer.seekTo((fraction * liveDuration).toLong())
                                 onSeekCompleted?.invoke()
                             }
-                        },
-                        onDragCancel = { isSeeking = false }
-                    )
-                }
-                .pointerInput(Unit) {
-                    detectTapGestures { offset ->
-                        val fraction = (offset.x / size.width).coerceIn(0f, 1f)
-                        val liveDuration = exoPlayer.duration.coerceAtLeast(0L)
-                        if (liveDuration > 0) {
-                            exoPlayer.seekTo((fraction * liveDuration).toLong())
-                            onSeekCompleted?.invoke()
                         }
+                    },
+                contentAlignment = Alignment.CenterStart
+            ) {
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.fillMaxWidth().height(trackHeight).clip(RoundedCornerShape(trackHeight / 2)),
+                    color = SakuraPrimary,
+                    trackColor = Color.White.copy(alpha = 0.3f)
+                )
+                if (showThumb) {
+                    Box(
+                        modifier = Modifier.fillMaxWidth(progress.coerceAtLeast(0.01f)),
+                        contentAlignment = Alignment.CenterEnd
+                    ) {
+                        Box(modifier = Modifier.size(thumbSize).background(SakuraPrimary, CircleShape))
                     }
-                },
-            contentAlignment = Alignment.CenterStart
-        ) {
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier.fillMaxWidth().height(trackHeight).clip(RoundedCornerShape(trackHeight / 2)),
-                color = SakuraPrimary,
-                trackColor = Color.White.copy(alpha = 0.3f)
-            )
-            if (showThumb) {
-                Box(
-                    modifier = Modifier.fillMaxWidth(progress.coerceAtLeast(0.01f)),
-                    contentAlignment = Alignment.CenterEnd
-                ) {
-                    Box(modifier = Modifier.size(10.dp).background(SakuraPrimary, CircleShape))
                 }
             }
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(formatLocalDuration(duration), color = Color.White.copy(alpha = 0.7f), fontSize = if (compact) 10.sp else 11.sp)
         }
-        Spacer(modifier = Modifier.width(6.dp))
-        Text(formatLocalDuration(duration), color = Color.White.copy(alpha = 0.7f), fontSize = if (compact) 10.sp else 11.sp)
     }
 }
 
@@ -804,7 +893,9 @@ private fun LocalInlineGestureOverlay(
                 .pointerInput(Unit) {
                     detectDragGestures(
                         onDragStart = { offset ->
-                            gestureVolume = exoPlayer.volume
+                            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                            gestureVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() /
+                                audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
                             val winBrightness = activity?.window?.attributes?.screenBrightness
                             gestureBrightness = if (winBrightness != null && winBrightness >= 0f) {
                                 winBrightness
@@ -818,8 +909,15 @@ private fun LocalInlineGestureOverlay(
                             if (dragAmount.y == 0f) return@detectDragGestures
                             val delta = -dragAmount.y / size.height
                             if (change.position.x > size.width / 2) {
+                                // 右半屏上下滑: 调系统媒体音量（与音量键一致，跨会话记忆）
+                                val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                                val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
                                 gestureVolume = (gestureVolume + delta * 2f).coerceIn(0f, 1f)
-                                exoPlayer.volume = gestureVolume
+                                audioManager.setStreamVolume(
+                                    AudioManager.STREAM_MUSIC,
+                                    (gestureVolume * maxVol).roundToInt().coerceIn(0, maxVol),
+                                    0
+                                )
                                 showVolumeIndicator = true
                             } else {
                                 gestureBrightness = (gestureBrightness + delta * 2f).coerceIn(0f, 1f)
@@ -953,7 +1051,9 @@ private fun LocalFullscreenPlayer(
                     if (isLocked) return@pointerInput
                     detectDragGestures(
                         onDragStart = { _ ->
-                            gestureVolume = exoPlayer.volume
+                            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                            gestureVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() /
+                                audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
                             val winBrightness = activity?.window?.attributes?.screenBrightness
                             gestureBrightness = if (winBrightness != null && winBrightness >= 0f) winBrightness
                             else (Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, 125) / 255f).coerceIn(0f, 1f)
@@ -963,8 +1063,16 @@ private fun LocalFullscreenPlayer(
                             if (dragAmount.y == 0f) return@detectDragGestures
                             val delta = -dragAmount.y / size.height
                             if (change.position.x > size.width / 2) {
+                                // 右半屏上下滑: 调系统媒体音量（与音量键一致，跨会话记忆）
+                                val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                                val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
                                 gestureVolume = (gestureVolume + delta * 2f).coerceIn(0f, 1f)
-                                exoPlayer.volume = gestureVolume; showVolumeIndicator = true
+                                audioManager.setStreamVolume(
+                                    AudioManager.STREAM_MUSIC,
+                                    (gestureVolume * maxVol).roundToInt().coerceIn(0, maxVol),
+                                    0
+                                )
+                                showVolumeIndicator = true
                             } else {
                                 gestureBrightness = (gestureBrightness + delta * 2f).coerceIn(0f, 1f)
                                 activity?.window?.attributes = activity?.window?.attributes?.apply { screenBrightness = gestureBrightness }
@@ -1192,48 +1300,107 @@ private fun LocalCastingControlPanel(
     videoTitle: String,
     episodeName: String,
     deviceName: String,
-    progress: String,
+    positionMs: Long,
+    durationMs: Long,
+    playbackState: String,
     currentEpisodeIndex: Int,
     totalEpisodes: Int,
     onPrevEpisode: () -> Unit,
     onStopCast: () -> Unit,
-    onNextEpisode: () -> Unit
+    onNextEpisode: () -> Unit,
+    onTogglePlayPause: () -> Unit,
+    onSeek: (Long) -> Unit = {}
 ) {
+    // 两次 SOAP 轮询(3s)之间本地插值，让进度显示平滑推进
+    var interpolatedMs by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(positionMs, playbackState) {
+        interpolatedMs = 0L
+        if (playbackState == "PLAYING") {
+            while (isActive) {
+                delay(1000)
+                interpolatedMs += 1000L
+            }
+        }
+    }
+    val displayMs = (positionMs + interpolatedMs).coerceAtMost(if (durationMs > 0) durationMs else Long.MAX_VALUE)
+
     Box(modifier = Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
         Column(
-            modifier = Modifier.fillMaxSize().padding(16.dp),
+            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Icon(Icons.Filled.Tv, null, tint = SakuraPrimary, modifier = Modifier.size(56.dp))
-            Spacer(modifier = Modifier.height(12.dp))
-            Text("投屏中", color = SakuraPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Icon(Icons.Filled.Tv, null, tint = SakuraPrimary, modifier = Modifier.size(40.dp))
             Spacer(modifier = Modifier.height(6.dp))
-            Text(deviceName, color = Color.White.copy(alpha = 0.9f), fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Text("投屏中", color = SakuraPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             Spacer(modifier = Modifier.height(4.dp))
-            Text(videoTitle, color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(deviceName, color = Color.White.copy(alpha = 0.9f), fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(videoTitle, color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (episodeName.isNotBlank()) {
-                Text(episodeName, color = Color.White.copy(alpha = 0.5f), fontSize = 12.sp)
+                Text(episodeName, color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp)
             }
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(progress, color = TextSecondary, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-            Spacer(modifier = Modifier.height(24.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
+            Spacer(modifier = Modifier.height(8.dp))
+            LocalCastSeekBar(positionMs = displayMs, durationMs = durationMs, onSeek = onSeek)
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (currentEpisodeIndex > 0) {
-                    IconButton(onClick = onPrevEpisode, modifier = Modifier.size(48.dp).background(Color.White.copy(alpha = 0.1f), CircleShape)) {
-                        Icon(Icons.Filled.SkipPrevious, "上一集", tint = Color.White, modifier = Modifier.size(28.dp))
+                    IconButton(onClick = onPrevEpisode, modifier = Modifier.size(44.dp).background(Color.White.copy(alpha = 0.1f), CircleShape)) {
+                        Icon(Icons.Filled.SkipPrevious, "上一集", tint = Color.White, modifier = Modifier.size(24.dp))
                     }
                 }
-                IconButton(onClick = onStopCast, modifier = Modifier.size(56.dp).background(Color(0xFFFF5252).copy(alpha = 0.2f), CircleShape)) {
-                    Icon(Icons.Filled.Close, "停止投屏", tint = Color(0xFFFF5252), modifier = Modifier.size(28.dp))
+                IconButton(
+                    onClick = onTogglePlayPause,
+                    modifier = Modifier
+                        .size(52.dp)
+                        .background(Color.White.copy(alpha = 0.15f), CircleShape)
+                        .border(1.dp, Color.White.copy(alpha = 0.25f), CircleShape)
+                ) {
+                    Icon(
+                        if (playbackState == "PLAYING") Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        contentDescription = if (playbackState == "PLAYING") "暂停" else "播放",
+                        tint = Color.White, modifier = Modifier.size(26.dp)
+                    )
                 }
                 if (currentEpisodeIndex < totalEpisodes - 1) {
-                    IconButton(onClick = onNextEpisode, modifier = Modifier.size(48.dp).background(Color.White.copy(alpha = 0.1f), CircleShape)) {
-                        Icon(Icons.Filled.SkipNext, "下一集", tint = Color.White, modifier = Modifier.size(28.dp))
+                    IconButton(onClick = onNextEpisode, modifier = Modifier.size(44.dp).background(Color.White.copy(alpha = 0.1f), CircleShape)) {
+                        Icon(Icons.Filled.SkipNext, "下一集", tint = Color.White, modifier = Modifier.size(24.dp))
                     }
                 }
             }
+            Spacer(modifier = Modifier.height(8.dp))
+            IconButton(onClick = onStopCast, modifier = Modifier.size(40.dp).background(Color(0xFFFF5252).copy(alpha = 0.2f), CircleShape)) {
+                Icon(Icons.Filled.Close, "停止投屏", tint = Color(0xFFFF5252), modifier = Modifier.size(20.dp))
+            }
         }
+    }
+}
+
+/**
+ * 本地播放投屏进度条：拖动结束通过 DLNA REL_TIME Seek 让 TV 跳转。
+ */
+@Composable
+private fun LocalCastSeekBar(positionMs: Long, durationMs: Long, onSeek: (Long) -> Unit) {
+    var isDragging by remember { mutableStateOf(false) }
+    var dragFraction by remember { mutableFloatStateOf(0f) }
+    val fraction = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Text(formatLocalDuration(positionMs), color = Color.White.copy(alpha = 0.8f), fontSize = 10.sp)
+        Slider(
+            value = if (isDragging) dragFraction else fraction,
+            onValueChange = { isDragging = true; dragFraction = it },
+            onValueChangeFinished = {
+                isDragging = false
+                if (durationMs > 0) onSeek((dragFraction * durationMs).toLong())
+            },
+            enabled = durationMs > 0,
+            modifier = Modifier.weight(1f).padding(horizontal = 6.dp),
+            colors = SliderDefaults.colors(
+                thumbColor = Color.White,
+                activeTrackColor = SakuraPrimary,
+                inactiveTrackColor = Color.White.copy(alpha = 0.25f)
+            )
+        )
+        Text(formatLocalDuration(durationMs), color = Color.White.copy(alpha = 0.8f), fontSize = 10.sp)
     }
 }
 
@@ -1244,7 +1411,7 @@ private fun LocalCastDeviceSheet(
     context: Context,
     scope: kotlinx.coroutines.CoroutineScope,
     onDismiss: () -> Unit,
-    onCastStarted: (String) -> Unit,
+    onCastStarted: (DLNACast.Device) -> Unit,
     onCastError: (String) -> Unit
 ) {
     AlertDialog(
@@ -1281,9 +1448,10 @@ private fun LocalCastDeviceSheet(
                                             it.start(); DlnaProxyService.proxyServer = it
                                         }
                                         val fileUrl = server.getLocalFileUrl(file.absolutePath)
-                                        val ok = DLNACast.castToDevice(device, fileUrl, state.videoName)
+                                        // DirectDlnaCaster: 正确 DIDL + 缓存 control URL（支持后续暂停/进度遥控）
+                                        val ok = DirectDlnaCaster.cast(device, fileUrl, state.videoName)
                                         if (ok) {
-                                            onCastStarted(device.name)
+                                            onCastStarted(device)
                                             if (exoPlayer.isPlaying) exoPlayer.pause()
                                         } else {
                                             castError = "投屏失败"

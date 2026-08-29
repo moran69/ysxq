@@ -156,6 +156,8 @@ fun DetailScreen(
     var isPlaying by remember { mutableStateOf(false) }
     var isBuffering by remember { mutableStateOf(false) }
     var isProgressSeeking by remember { mutableStateOf(false) }
+    // 当前播放倍速（弹幕滚动速度同步用）
+    var playbackSpeedFactor by remember { mutableFloatStateOf(1f) }
     var isFullscreen by remember { mutableStateOf(false) }
     var showControls by remember { mutableStateOf(true) }
     var isLocked by remember { mutableStateOf(false) }
@@ -180,6 +182,7 @@ fun DetailScreen(
     var showCastExitDialog by remember { mutableStateOf(false) }
     var stopCastingCallback by remember { mutableStateOf<(() -> Unit)?>(null) }
     var lastCastPositionMs by remember { mutableStateOf(0L) }
+    var wasPlayingBeforeCast by remember { mutableStateOf(false) }
     var isLongPressSpeed by remember { mutableStateOf(false) }
     var speedBeforeLongPress by remember { mutableFloatStateOf(1f) }
     var showLoginDialog by remember { mutableStateOf(false) }
@@ -286,6 +289,9 @@ fun DetailScreen(
                             width = this@apply.videoSize.width,
                             height = this@apply.videoSize.height
                         )
+                    }
+                    override fun onPlaybackParametersChanged(playbackParameters: androidx.media3.common.PlaybackParameters) {
+                        playbackSpeedFactor = playbackParameters.speed
                     }
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         isBuffering = playbackState == Player.STATE_BUFFERING
@@ -492,6 +498,11 @@ fun DetailScreen(
                 }
             } else {
                 emptyList()
+            }
+            // 预取下一集弹幕（resolveDanmaku 有缓存，切集时秒显）
+            val totalEps = state.sources.getOrNull(state.currentSourceIndex)?.episodes?.size ?: 0
+            if (episodeNo + 1 <= totalEps) {
+                try { DmkuApi.resolveDanmaku(name, episodeNo + 1) } catch (_: Exception) { }
             }
         }
     }
@@ -823,14 +834,17 @@ fun DetailScreen(
                                 .show(WindowInsetsCompat.Type.systemBars())
                         }
                     }
+                    wasPlayingBeforeCast = exoPlayer.isPlaying
                     if (exoPlayer.isPlaying) exoPlayer.pause()
                 } else {
                     showCastSheet = false
                     castCommandHandler = null
+                    castSeekHandler = null
                     if (lastCastPositionMs > 0 && exoPlayer.contentDuration > 0) {
                         exoPlayer.seekTo(lastCastPositionMs)
                     }
-                    exoPlayer.play()
+                    // 投屏前在播才恢复播放，避免投完屏回来突然自动播
+                    if (wasPlayingBeforeCast) exoPlayer.play()
                     lastCastPositionMs = 0L
                 }
             },
@@ -1047,6 +1061,7 @@ fun DetailScreen(
                 ?.episodes?.getOrNull(state.currentEpisodeIndex)?.name ?: "",
             onSeekCompleted = { saveWatchProgress() },
             currentPositionMs = currentPositionMs,
+            playbackSpeed = playbackSpeedFactor,
             danmakuList = danmakuList,
             danmakuConfig = danmakuConfig,
             onDanmakuConfigChange = { danmakuConfig = it },
@@ -1508,6 +1523,7 @@ private fun FullscreenPlayer(
     videoName: String,
     episodeName: String,
     currentPositionMs: Long = 0L,
+    playbackSpeed: Float = 1f,
     danmakuList: List<com.momo.app.ui.danmaku.DanmakuItem> = emptyList(),
     danmakuConfig: com.momo.app.ui.danmaku.DanmakuConfig = com.momo.app.ui.danmaku.DanmakuConfig(),
     onDanmakuConfigChange: (com.momo.app.ui.danmaku.DanmakuConfig) -> Unit = {},
@@ -1636,6 +1652,7 @@ private fun FullscreenPlayer(
             currentPositionMs = currentPositionMs,
             isPlaying = isPlaying,
             config = localDanmakuConfig,
+            playbackSpeed = playbackSpeed,
             modifier = Modifier.fillMaxSize()
         )
 
