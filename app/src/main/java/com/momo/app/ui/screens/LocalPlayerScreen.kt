@@ -10,6 +10,7 @@ import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -480,7 +481,17 @@ fun LocalPlayerScreen(
             hasPrevEpisode = state.currentEpisodeIndex > 0,
             hasNextEpisode = state.currentEpisodeIndex < state.episodes.size - 1,
             videoName = state.videoName,
-            episodeName = state.episodes.getOrNull(state.currentEpisodeIndex)?.episodeName ?: ""
+            episodeName = state.episodes.getOrNull(state.currentEpisodeIndex)?.episodeName ?: "",
+            playerError = playerError,
+            onRetry = {
+                playerError = null
+                hasMediaLoaded = false
+                state.currentFile?.let { f ->
+                    exoPlayer.setMediaItem(MediaItem.fromUri(Uri.fromFile(f)))
+                    exoPlayer.prepare()
+                    exoPlayer.playWhenReady = true
+                }
+            }
         )
     } else {
         Column(modifier = Modifier.fillMaxSize().background(DarkBackground)) {
@@ -553,21 +564,18 @@ fun LocalPlayerScreen(
                         }
 
                         if (playerError != null) {
-                            Box(modifier = Modifier.fillMaxSize().background(DarkBackground.copy(alpha = 0.8f)), contentAlignment = Alignment.Center) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Text("播放失败", color = Color(0xFFFF5252), fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(playerError!!, color = TextSecondary, fontSize = 12.sp, maxLines = 2)
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    OutlinedButton(onClick = {
-                                        playerError = null; hasMediaLoaded = false
-                                        state.currentFile?.let { f ->
-                                            exoPlayer.setMediaItem(MediaItem.fromUri(Uri.fromFile(f)))
-                                            exoPlayer.prepare(); exoPlayer.playWhenReady = true
-                                        }
-                                    }, colors = ButtonDefaults.outlinedButtonColors(contentColor = SakuraPrimary)) { Text("重试") }
+                            LocalPlayerErrorOverlay(
+                                errorMessage = playerError!!,
+                                onRetry = {
+                                    playerError = null
+                                    hasMediaLoaded = false
+                                    state.currentFile?.let { f ->
+                                        exoPlayer.setMediaItem(MediaItem.fromUri(Uri.fromFile(f)))
+                                        exoPlayer.prepare()
+                                        exoPlayer.playWhenReady = true
+                                    }
                                 }
-                            }
+                            )
                         }
 
                         if (!isCasting) {
@@ -1012,6 +1020,85 @@ private fun LocalInlineGestureOverlay(
 }
 
 @Composable
+private fun LocalPlayerErrorOverlay(
+    errorMessage: String,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.82f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = DarkSurface.copy(alpha = 0.95f),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
+            shadowElevation = 8.dp,
+            modifier = Modifier
+                .padding(horizontal = 24.dp)
+                .widthIn(max = 340.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(Color(0xFFFF5252).copy(alpha = 0.15f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Filled.TvOff,
+                        contentDescription = null,
+                        tint = Color(0xFFFF6B6B),
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "视频播放失败",
+                    color = TextPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = errorMessage,
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Button(
+                    onClick = onRetry,
+                    shape = RoundedCornerShape(20.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SakuraPrimary,
+                        contentColor = Color.White
+                    ),
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp)
+                ) {
+                    Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("重新加载", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun LocalFullscreenPlayer(
     exoPlayer: ExoPlayer,
     isPlaying: Boolean,
@@ -1033,7 +1120,9 @@ private fun LocalFullscreenPlayer(
     hasPrevEpisode: Boolean,
     hasNextEpisode: Boolean,
     videoName: String,
-    episodeName: String
+    episodeName: String,
+    playerError: String? = null,
+    onRetry: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -1154,7 +1243,7 @@ private fun LocalFullscreenPlayer(
         }
 
         // Buffering indicator
-        if (isBuffering) {
+        if (isBuffering && playerError == null) {
             Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.3f)), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator(modifier = Modifier.size(40.dp), color = SakuraPrimary, strokeWidth = 3.dp)
@@ -1162,6 +1251,13 @@ private fun LocalFullscreenPlayer(
                     Text(if (!hasMediaLoaded) "视频加载中..." else "缓冲中...", color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
                 }
             }
+        }
+
+        if (playerError != null) {
+            LocalPlayerErrorOverlay(
+                errorMessage = playerError,
+                onRetry = onRetry
+            )
         }
 
         // Controls overlay
@@ -1428,20 +1524,40 @@ private fun LocalCastDeviceSheet(
     onCastStarted: (DLNACast.Device) -> Unit,
     onCastError: (String) -> Unit
 ) {
+    var devices by remember { mutableStateOf<List<DLNACast.Device>>(emptyList()) }
+    var isSearching by remember { mutableStateOf(true) }
+    var castError by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        isSearching = true
+        devices = withContext(Dispatchers.IO) { searchDlnaDevices(context) }
+        isSearching = false
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("投屏到设备", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold) },
-        text = {
-            var devices by remember { mutableStateOf<List<DLNACast.Device>>(emptyList()) }
-            var isSearching by remember { mutableStateOf(true) }
-            var castError by remember { mutableStateOf<String?>(null) }
-
-            LaunchedEffect(Unit) {
-                isSearching = true
-                devices = withContext(Dispatchers.IO) { searchDlnaDevices(context) }
-                isSearching = false
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("投屏到设备", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                IconButton(
+                    onClick = {
+                        scope.launch {
+                            isSearching = true
+                            castError = null
+                            devices = withContext(Dispatchers.IO) { searchDlnaDevices(context) }
+                            isSearching = false
+                        }
+                    }
+                ) {
+                    Icon(Icons.Filled.Refresh, contentDescription = "刷新搜索", tint = SakuraPrimary)
+                }
             }
-
+        },
+        text = {
             Column {
                 if (isSearching) {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 16.dp)) {
@@ -1450,7 +1566,30 @@ private fun LocalCastDeviceSheet(
                         Text("搜索设备中...", color = TextSecondary, fontSize = 14.sp)
                     }
                 } else if (devices.isEmpty()) {
-                    Text("未找到设备，请确保手机和电视在同一WiFi下", color = TextTertiary, fontSize = 13.sp, modifier = Modifier.padding(vertical = 16.dp))
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text("未找到设备，请确保手机和电视在同一WiFi下", color = TextTertiary, fontSize = 13.sp, textAlign = TextAlign.Center)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    isSearching = true
+                                    castError = null
+                                    devices = withContext(Dispatchers.IO) { searchDlnaDevices(context) }
+                                    isSearching = false
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = SakuraPrimary),
+                            shape = RoundedCornerShape(18.dp),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
+                        ) {
+                            Icon(Icons.Filled.Refresh, null, modifier = Modifier.size(15.dp), tint = Color.White)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("重新搜索", color = Color.White, fontSize = 12.sp)
+                        }
+                    }
                 } else {
                     devices.forEach { device ->
                         Surface(

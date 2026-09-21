@@ -1,8 +1,11 @@
 package com.momo.app.ui.screens
 
-import androidx.compose.ui.graphics.Color
+import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -10,6 +13,8 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -17,34 +22,45 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import coil3.compose.AsyncImage
+import com.momo.app.data.VideoItem
+import com.momo.app.data.VideoSource
 import com.momo.app.ui.components.*
 import com.momo.app.ui.theme.*
+import com.momo.app.viewmodel.SearchResultItem
+import com.momo.app.viewmodel.SearchSourceFilter
 import com.momo.app.viewmodel.SearchViewModel
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SearchScreen(
     onVideoClick: (Int) -> Unit,
+    onSusouClick: (VideoItem, List<VideoSource>) -> Unit = { _, _ -> },
+    onKanjuAiClick: (VideoItem, List<VideoSource>) -> Unit = { _, _ -> },
     onBack: () -> Unit,
     initialQuery: String = "",
     viewModel: SearchViewModel = viewModel()
 ) {
     val state by viewModel.state.collectAsState()
     val gridState = rememberLazyGridState()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(initialQuery) {
         if (initialQuery.isNotBlank() && state.query != initialQuery) {
@@ -53,7 +69,7 @@ fun SearchScreen(
         }
     }
 
-    LaunchedEffect(gridState, state.results) {
+    LaunchedEffect(gridState, state.allResults) {
         snapshotFlow {
             val lastVisible = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
             val totalItems = gridState.layoutInfo.totalItemsCount
@@ -89,10 +105,9 @@ fun SearchScreen(
             OutlinedTextField(
                 value = state.query,
                 onValueChange = { viewModel.updateQuery(it) },
-                modifier = Modifier
-                    .weight(1f),
+                modifier = Modifier.weight(1f),
                 placeholder = {
-                    Text("搜索影片名称...", color = TextTertiary, fontSize = 14.sp)
+                    Text("全网聚合搜索 (本站/速搜/看剧AI)...", color = TextTertiary, fontSize = 13.sp)
                 },
                 singleLine = true,
                 shape = RoundedCornerShape(24.dp),
@@ -133,37 +148,130 @@ fun SearchScreen(
         // 搜索结果或建议
         when {
             state.hasSearched -> {
-                // 已执行搜索，显示完整结果
+                // 来源过滤标签
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    SearchSourceFilter.entries.forEach { filter ->
+                        val count = when (filter) {
+                            SearchSourceFilter.ALL -> state.totalCount
+                            SearchSourceFilter.MAC_CMS -> state.macResults.size
+                            SearchSourceFilter.SUSOU -> state.susouResults.size
+                            SearchSourceFilter.KANJU_AI -> state.kanjuResults.size
+                        }
+                        val isSelected = state.selectedFilter == filter
+                        Surface(
+                            onClick = { viewModel.selectFilter(filter) },
+                            shape = RoundedCornerShape(16.dp),
+                            color = if (isSelected) SakuraPrimary else DarkSurface,
+                            border = if (isSelected) null else BorderStroke(1.dp, Color.White.copy(alpha = 0.08f))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = filter.displayName,
+                                    fontSize = 13.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isSelected) DarkBackground else TextSecondary
+                                )
+                                if (count > 0) {
+                                    Spacer(modifier = Modifier.width(5.dp))
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = if (isSelected) DarkBackground.copy(alpha = 0.22f) else DarkSurfaceVariant
+                                    ) {
+                                        Text(
+                                            text = if (count > 99) "99+" else "$count",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isSelected) DarkBackground else TextTertiary,
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 内容区
                 when {
                     state.isLoading -> {
                         LoadingIndicator(modifier = Modifier.weight(1f))
                     }
-                    state.error != null -> {
-                        Box(modifier = Modifier.weight(1f)) {
-                            ErrorState(
-                                message = state.error ?: "搜索失败",
-                                onRetry = { viewModel.search() }
-                            )
-                        }
-                    }
-                    state.results.isEmpty() -> {
-                        Box(modifier = Modifier.weight(1f)) {
-                            EmptyState(message = "没有找到相关影片，换个关键词试试吧~")
+                    state.displayResults.isEmpty() -> {
+                        Box(
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                EmptyState(
+                                    message = if (state.totalCount > 0) {
+                                        "「${state.selectedFilter.displayName}」暂无该影片，可在其他来源查看"
+                                    } else {
+                                        state.error ?: "全网未找到相关影片，换个关键词试试吧~"
+                                    }
+                                )
+                                if (state.totalCount > 0 && state.selectedFilter != SearchSourceFilter.ALL) {
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    OutlinedButton(
+                                        onClick = { viewModel.selectFilter(SearchSourceFilter.ALL) },
+                                        shape = RoundedCornerShape(20.dp),
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = SakuraPrimary),
+                                        border = BorderStroke(1.dp, SakuraPrimary.copy(alpha = 0.5f))
+                                    ) {
+                                        Text("查看全部来源 (${state.totalCount})")
+                                    }
+                                }
+                            }
                         }
                     }
                     else -> {
                         LazyVerticalGrid(
                             columns = GridCells.Fixed(3),
                             state = gridState,
-                            contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 80.dp),
+                            contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 80.dp),
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp),
                             modifier = Modifier.weight(1f)
                         ) {
-                            items(state.results) { video ->
-                                VideoGridItem(
-                                    video = video,
-                                    onClick = { onVideoClick(video.id) }
+                            items(state.displayResults, key = { it.id }) { item ->
+                                UnifiedSearchGridItem(
+                                    result = item,
+                                    isResolving = state.resolvingId == item.id,
+                                    onClick = {
+                                        when (item) {
+                                            is SearchResultItem.MacCms -> {
+                                                onVideoClick(item.video.id)
+                                            }
+                                            is SearchResultItem.Susou -> {
+                                                scope.launch {
+                                                    val detail = viewModel.resolveSusou(item.item)
+                                                    if (detail != null) {
+                                                        onSusouClick(detail.first, detail.second)
+                                                    } else {
+                                                        Toast.makeText(context, "该片源暂无可用播放源", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            }
+                                            is SearchResultItem.KanjuAi -> {
+                                                scope.launch {
+                                                    val detail = viewModel.resolveKanjuAi(item.item)
+                                                    if (detail != null) {
+                                                        onKanjuAiClick(detail.first, detail.second)
+                                                    } else {
+                                                        Toast.makeText(context, "该片源暂无可用播放源", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 )
                             }
                             if (state.isLoadingMore) {
@@ -184,7 +292,6 @@ fun SearchScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    // 点击建议项：填入名称并执行搜索
                                     viewModel.updateQuery(video.name)
                                     viewModel.search()
                                 }
@@ -296,15 +403,16 @@ fun SearchScreen(
                         verticalArrangement = Arrangement.Center
                     ) {
                         Text(
-                            text = "输入关键词开始搜索",
-                            color = TextTertiary,
-                            fontSize = 14.sp
+                            text = "输入关键词开始全网聚合搜索",
+                            color = TextPrimary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium
                         )
+                        Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "支持影片名称、演员、导演等",
-                            color = TextTertiary.copy(alpha = 0.7f),
-                            fontSize = 12.sp,
-                            modifier = Modifier.padding(top = 8.dp)
+                            text = "自动汇总自建主源、速搜、看剧AI等各大片源",
+                            color = TextTertiary,
+                            fontSize = 12.sp
                         )
                     }
                 }
@@ -332,6 +440,123 @@ fun SearchScreen(
                 }
             },
             containerColor = DarkSurface
+        )
+    }
+}
+
+@Composable
+private fun UnifiedSearchGridItem(
+    result: SearchResultItem,
+    isResolving: Boolean,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        horizontalAlignment = Alignment.Start
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(2f / 3f)
+                .clip(RoundedCornerShape(14.dp))
+                .background(DarkSurfaceVariant)
+                .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)), RoundedCornerShape(14.dp))
+        ) {
+            if (result.pic.isNotBlank()) {
+                AsyncImage(
+                    model = result.pic,
+                    contentDescription = result.title,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                )
+            } else {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = DarkSurfaceVariant
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = result.title.take(2),
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextTertiary.copy(alpha = 0.5f)
+                        )
+                    }
+                }
+            }
+
+            // 来源角标（左上角）
+            val badgeBg = when (result.sourceFilter) {
+                SearchSourceFilter.MAC_CMS -> Color(0xFF1976D2) // 经典科技蓝
+                SearchSourceFilter.SUSOU -> Color(0xFF764BA2)   // 优雅紫
+                SearchSourceFilter.KANJU_AI -> Color(0xFFC77DA0)// 樱花暗粉
+                else -> DarkSurface
+            }
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(5.dp),
+                shape = RoundedCornerShape(6.dp),
+                color = badgeBg.copy(alpha = 0.92f)
+            ) {
+                Text(
+                    text = result.sourceBadgeName,
+                    fontSize = 9.sp,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                )
+            }
+
+            // 备注/集数角标（右上角）
+            if (result.remarks.isNotBlank()) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(5.dp),
+                    shape = RoundedCornerShape(6.dp),
+                    color = Color.Black.copy(alpha = 0.72f)
+                ) {
+                    Text(
+                        text = result.remarks,
+                        fontSize = 9.sp,
+                        color = Color.White.copy(alpha = 0.9f),
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            // 加载详情浮层
+            if (isResolving) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.6f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        color = SakuraPrimary,
+                        strokeWidth = 2.5.dp
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = result.title,
+            fontSize = 12.sp,
+            color = TextPrimary,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }

@@ -1090,7 +1090,30 @@ fun DetailScreen(
                     val hex = "#%06X".format(color.toInt() and 0xFFFFFF)
                     DmkuApi.sendDanmaku(name, episodeNo, posMs, text, hex)
                 }
-            }
+            },
+            playerError = playerError,
+            hasMultipleSources = state.sources.size > 1,
+            nextSourceName = state.sources.getOrNull((state.currentSourceIndex + 1) % (state.sources.size.coerceAtLeast(1)))?.label ?: "",
+            onRetry = {
+                playerError = null
+                hasMediaLoaded = false
+                isBuffering = true
+                userRequestedPlay = true
+                val url = lastPreparedUrl
+                if (url != null) {
+                    scope.launch { prepareAndPlay(url, viewModel.resolvePlayUrl(url)) }
+                }
+            },
+            onSwitchSource = if (state.sources.size > 1) {
+                {
+                    val nextIdx = (state.currentSourceIndex + 1) % state.sources.size
+                    viewModel.selectSource(nextIdx)
+                    playerError = null
+                    hasMediaLoaded = false
+                    isBuffering = true
+                    userRequestedPlay = true
+                }
+            } else null
         )
         } // end else (not casting)
     } else {
@@ -1186,24 +1209,31 @@ fun DetailScreen(
                             }
 
                             if (playerError != null) {
-                                Box(modifier = Modifier.fillMaxSize().background(DarkBackground.copy(alpha = 0.8f)), contentAlignment = Alignment.Center) {
-                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                        Text("播放失败", color = Color(0xFFFF5252), fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(playerError!!, color = TextSecondary, fontSize = 12.sp, maxLines = 2)
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        OutlinedButton(onClick = {
+                                PlayerErrorOverlay(
+                                    errorMessage = playerError!!,
+                                    hasMultipleSources = state.sources.size > 1,
+                                    nextSourceName = state.sources.getOrNull((state.currentSourceIndex + 1) % (state.sources.size.coerceAtLeast(1)))?.label ?: "",
+                                    onRetry = {
+                                        playerError = null
+                                        hasMediaLoaded = false
+                                        isBuffering = true
+                                        userRequestedPlay = true
+                                        val url = lastPreparedUrl
+                                        if (url != null) {
+                                            scope.launch { prepareAndPlay(url, viewModel.resolvePlayUrl(url)) }
+                                        }
+                                    },
+                                    onSwitchSource = if (state.sources.size > 1) {
+                                        {
+                                            val nextIdx = (state.currentSourceIndex + 1) % state.sources.size
+                                            viewModel.selectSource(nextIdx)
                                             playerError = null
                                             hasMediaLoaded = false
                                             isBuffering = true
                                             userRequestedPlay = true
-                                            val url = lastPreparedUrl
-                                            if (url != null) {
-                                                scope.launch { prepareAndPlay(url, viewModel.resolvePlayUrl(url)) }
-                                            }
-                                        }, colors = ButtonDefaults.outlinedButtonColors(contentColor = SakuraPrimary)) { Text("重试") }
-                                    }
-                                }
+                                        }
+                                    } else null
+                                )
                             }
 
                             if (!isCasting) {
@@ -1513,6 +1543,114 @@ fun DetailScreen(
 }
 
 @Composable
+private fun PlayerErrorOverlay(
+    errorMessage: String,
+    hasMultipleSources: Boolean,
+    nextSourceName: String = "",
+    onRetry: () -> Unit,
+    onSwitchSource: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.82f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = DarkSurface.copy(alpha = 0.95f),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
+            shadowElevation = 8.dp,
+            modifier = Modifier
+                .padding(horizontal = 24.dp)
+                .widthIn(max = 360.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(Color(0xFFFF5252).copy(alpha = 0.15f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Filled.TvOff,
+                        contentDescription = null,
+                        tint = Color(0xFFFF6B6B),
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "视频播放遇到问题",
+                    color = TextPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = errorMessage,
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedButton(
+                        onClick = onRetry,
+                        shape = RoundedCornerShape(20.dp),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f)),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = DarkSurfaceVariant.copy(alpha = 0.6f),
+                            contentColor = TextPrimary
+                        ),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("重新加载", fontSize = 13.sp)
+                    }
+
+                    if (hasMultipleSources && onSwitchSource != null) {
+                        Button(
+                            onClick = onSwitchSource,
+                            shape = RoundedCornerShape(20.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = SakuraPrimary,
+                                contentColor = Color.White
+                            ),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                        ) {
+                            Icon(Icons.Filled.SwapHoriz, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                if (nextSourceName.isNotBlank()) "切至$nextSourceName" else "换线重试",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun FullscreenPlayer(
     exoPlayer: ExoPlayer,
     isPlaying: Boolean,
@@ -1541,7 +1679,12 @@ private fun FullscreenPlayer(
     danmakuConfig: com.momo.app.ui.danmaku.DanmakuConfig = com.momo.app.ui.danmaku.DanmakuConfig(),
     onDanmakuConfigChange: (com.momo.app.ui.danmaku.DanmakuConfig) -> Unit = {},
     onSendDanmaku: (String, Long, com.momo.app.ui.danmaku.DanmakuType) -> Unit = { _, _, _ -> },
-    onSeekCompleted: () -> Unit = {}
+    onSeekCompleted: () -> Unit = {},
+    playerError: String? = null,
+    hasMultipleSources: Boolean = false,
+    nextSourceName: String = "",
+    onRetry: () -> Unit = {},
+    onSwitchSource: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -1939,7 +2082,7 @@ private fun FullscreenPlayer(
             }
         }
 
-        if (isBuffering) {
+        if (isBuffering && playerError == null) {
             if (!hasMediaLoaded) {
                 Image(
                     painter = painterResource(id = R.drawable.detail_background),
@@ -1960,6 +2103,16 @@ private fun FullscreenPlayer(
                     Text(if (!hasMediaLoaded) "视频加载中..." else "缓冲中...", color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
                 }
             }
+        }
+
+        if (playerError != null) {
+            PlayerErrorOverlay(
+                errorMessage = playerError,
+                hasMultipleSources = hasMultipleSources,
+                nextSourceName = nextSourceName,
+                onRetry = onRetry,
+                onSwitchSource = onSwitchSource
+            )
         }
 
         AnimatedVisibility(
@@ -2980,13 +3133,36 @@ private fun CastDeviceSheet(
                 .padding(horizontal = 16.dp)
                 .padding(bottom = 32.dp)
         ) {
-            Text("投屏到设备", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                if (videoUrl != null) "将「$videoTitle」投屏到同一WiFi下的电视或盒子"
-                else "请先选择一集视频再投屏",
-                color = TextSecondary, fontSize = 13.sp
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("投屏到设备", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        if (videoUrl != null) "将「$videoTitle」投屏到同一WiFi下的电视或盒子"
+                        else "请先选择一集视频再投屏",
+                        color = TextSecondary, fontSize = 13.sp
+                    )
+                }
+                if (!isSearching && !isCasting) {
+                    IconButton(
+                        onClick = {
+                            scope.launch {
+                                isSearching = true
+                                castError = null
+                                try { devices = searchDlnaDevices(context) }
+                                catch (_: Exception) { castError = "搜索设备失败，请确保手机与电视在同一WiFi网络" }
+                                isSearching = false
+                            }
+                        }
+                    ) {
+                        Icon(Icons.Filled.Refresh, contentDescription = "刷新设备", tint = SakuraPrimary)
+                    }
+                }
+            }
             Spacer(modifier = Modifier.height(16.dp))
 
             when {
@@ -3028,20 +3204,58 @@ private fun CastDeviceSheet(
                 castError != null -> {
                     Box(modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(Icons.Filled.WifiOff, null, tint = TextTertiary, modifier = Modifier.size(40.dp))
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(castError!!, color = TextTertiary, fontSize = 13.sp, textAlign = TextAlign.Center)
+                            Icon(Icons.Filled.WifiOff, null, tint = Color(0xFFFF6B6B), modifier = Modifier.size(42.dp))
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(castError!!, color = TextPrimary, fontSize = 13.sp, textAlign = TextAlign.Center)
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        isSearching = true
+                                        castError = null
+                                        try { devices = searchDlnaDevices(context) }
+                                        catch (_: Exception) { castError = "搜索设备失败，请检查网络" }
+                                        isSearching = false
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = SakuraPrimary),
+                                shape = RoundedCornerShape(20.dp),
+                                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp)
+                            ) {
+                                Icon(Icons.Filled.Refresh, null, modifier = Modifier.size(16.dp), tint = Color.White)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("重试搜索", color = Color.White, fontSize = 13.sp)
+                            }
                         }
                     }
                 }
                 devices.isEmpty() -> {
                     Box(modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(Icons.Filled.CastConnected, null, tint = TextTertiary, modifier = Modifier.size(40.dp))
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("未发现可用设备", color = TextTertiary, fontSize = 13.sp)
+                            Icon(Icons.Filled.CastConnected, null, tint = TextTertiary, modifier = Modifier.size(42.dp))
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text("未发现可用设备", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                             Spacer(modifier = Modifier.height(4.dp))
-                            Text("请确保手机与电视在同一WiFi下", color = TextTertiary, fontSize = 12.sp)
+                            Text("请确保手机与电视在同一WiFi网络下", color = TextTertiary, fontSize = 12.sp)
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        isSearching = true
+                                        castError = null
+                                        try { devices = searchDlnaDevices(context) }
+                                        catch (_: Exception) { castError = "搜索设备失败，请检查网络" }
+                                        isSearching = false
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = SakuraPrimary),
+                                shape = RoundedCornerShape(20.dp),
+                                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp)
+                            ) {
+                                Icon(Icons.Filled.Refresh, null, modifier = Modifier.size(16.dp), tint = Color.White)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("重新搜索设备", color = Color.White, fontSize = 13.sp)
+                            }
                         }
                     }
                 }

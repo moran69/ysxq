@@ -268,6 +268,62 @@ object SusouApi {
                 null
             }
         }
+
+    // ========== 7. 综合详情反查封装 (供速搜页面与全局搜索共用) ==========
+    /**
+     * 速搜卡片详情反查：优先根据 vodId 查备用源，未命中则走剧名搜索反查。
+     * 返回标准 (VideoItem, List<VideoSource>)
+     */
+    suspend fun resolveDetail(item: SusouVideoItem): Pair<VideoItem, List<VideoSource>>? =
+        withContext(Dispatchers.IO) {
+            try {
+                val rbotv = try {
+                    rbotvDetail(item.vodId)
+                } catch (_: Exception) {
+                    null
+                }
+                if (rbotv != null && rbotv.vodPlayList.isNotEmpty()) {
+                    buildDetail(item, rbotv.vodName, rbotv.vodPic, rbotv.vodRemarks, rbotv.vodPlayList)
+                } else {
+                    fetchDetailByKeyword(item.vodName)
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+    private fun buildDetail(
+        item: SusouVideoItem,
+        name: String,
+        pic: String,
+        remarks: String,
+        playList: List<RbotvPlayList>
+    ): Pair<VideoItem, List<VideoSource>>? {
+        val sources = playList.mapNotNull { pl ->
+            val parseUrls = pl.parseUrls
+            val eps = pl.urls.mapNotNull { ep ->
+                val url = ep.url.trim()
+                when {
+                    url.isBlank() -> null
+                    url.startsWith("NBY-") -> Episode(name = ep.name, url = url, parseUrls = parseUrls)
+                    url.startsWith("http") -> Episode(name = ep.name, url = url)
+                    else -> null
+                }
+            }
+            if (eps.isEmpty()) null else VideoSource(label = friendlySourceName(pl.flag, pl.name), episodes = eps)
+        }
+        if (sources.isEmpty()) return null
+        val video = VideoItem(
+            id = item.vodId,
+            name = name.ifBlank { item.vodName },
+            pic = pic.ifBlank { item.vodPic },
+            remarks = remarks.ifBlank { item.vodRemarks },
+            typeName = "速搜",
+            actor = item.vodActor,
+            year = item.vodYear
+        )
+        return video to sources
+    }
 }
 
 /**

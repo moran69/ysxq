@@ -360,6 +360,14 @@ fun AppNavHost(
                     onVideoClick = { videoId ->
                         navController.navigate(Screen.Detail.createRoute(videoId))
                     },
+                    onSusouClick = { video, sources ->
+                        com.momo.app.data.susou.SusouNavHolder.put(video to sources)
+                        navController.navigate(Screen.Detail.createRoute(video.id, susou = true))
+                    },
+                    onKanjuAiClick = { video, sources ->
+                        com.momo.app.data.kanjuai.KanjuAiNavHolder.put(video to sources)
+                        navController.navigate(Screen.Detail.createRoute(video.id, kanjuai = true))
+                    },
                     onBack = { navController.popBackStack() }
                 )
             }
