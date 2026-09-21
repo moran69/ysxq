@@ -95,11 +95,34 @@ object SusouApi {
         }
     }
 
-    // ========== 1. 速搜自家: 搜索 (明文) ==========
+    // ========== 1. 速搜搜索 (优先使用高可靠性 rbotv 备用源，兼顾自家端口) ==========
     suspend fun search(keyword: String): List<SusouVideoItem> =
         withContext(Dispatchers.IO) {
             ttlCache.get<List<SusouVideoItem>>("ss_$keyword", 60_000)?.let { return@withContext it }
-            var lastErr: Exception? = null
+
+            // 1. 优先走备用源 rbotv 搜索（全量剧集库，带直链海报与清晰剧集）
+            try {
+                val rbotvList = rbotvSearch(keyword)
+                if (rbotvList.isNotEmpty()) {
+                    val mapped = rbotvList.map { r ->
+                        SusouVideoItem(
+                            vodId = r.vodId,
+                            vodName = r.vodName,
+                            vodPic = r.vodPic,
+                            vodRemarks = r.vodRemarks,
+                            vodActor = r.vodActor,
+                            vodYear = r.vodYear,
+                            vodScore = r.vodScore
+                        )
+                    }
+                    ttlCache.put("ss_$keyword", mapped)
+                    return@withContext mapped
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("SusouApi", "rbotvSearch 失败，尝试自家端口", e)
+            }
+
+            // 2. 备选：走速搜自家端口
             for (port in BIZ_PORTS) {
                 try {
                     val url = "http://$BIZ_HOST:$port/api.php/app/search?text=" +
@@ -107,19 +130,21 @@ object SusouApi {
                     val request = Request.Builder()
                         .url(url)
                         .header("User-Agent", "okhttp/4.9.2")
+                        .header("X-Requested-With", "com.sjz.ss")
                         .get()
                         .build()
                     val body = exec(request)
-                    val resp = json.decodeFromString(SusouSearchResponse.serializer(), body)
-                    if (resp.code == 1 && resp.list.isNotEmpty()) {
-                        ttlCache.put("ss_$keyword", resp.list)
-                        return@withContext resp.list
+                    if (body.isNotBlank()) {
+                        val resp = json.decodeFromString(SusouSearchResponse.serializer(), body)
+                        if (resp.code == 1 && resp.list.isNotEmpty()) {
+                            ttlCache.put("ss_$keyword", resp.list)
+                            return@withContext resp.list
+                        }
                     }
-                } catch (e: Exception) {
-                    lastErr = e
-                }
+                } catch (_: Exception) { }
             }
-            throw lastErr ?: RuntimeException("速搜搜索失败")
+
+            emptyList()
         }
 
     // ========== 2. 备用源: 搜索 (MD5 签名) ==========

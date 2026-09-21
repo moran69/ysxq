@@ -79,59 +79,6 @@ class SusouViewModel : ViewModel() {
      * 返回 null 表示无可播放源
      */
     suspend fun resolveDetail(item: SusouVideoItem): Pair<VideoItem, List<VideoSource>>? {
-        android.util.Log.d("SusouVM", "resolveDetail start: vodId=${item.vodId} name=${item.vodName}")
-        return try {
-            // 优先用速搜自家 vod_id 直接查备用源（同片源库，id 通常一致）
-            val rbotv = try {
-                SusouApi.rbotvDetail(item.vodId)
-            } catch (e: Exception) {
-                android.util.Log.e("SusouVM", "rbotvDetail(vodId=${item.vodId}) 失败: ${e.javaClass.simpleName}: ${e.message}", e)
-                null
-            }
-            if (rbotv != null && rbotv.vodPlayList.isNotEmpty()) {
-                android.util.Log.d("SusouVM", "rbotvDetail 命中: vodId=${rbotv.vodId} 线路数=${rbotv.vodPlayList.size}")
-                buildDetail(item, rbotv.vodName, rbotv.vodPic, rbotv.vodRemarks, rbotv.vodPlayList)
-            } else {
-                android.util.Log.d("SusouVM", "rbotvDetail 未命中(vodPlayList=${rbotv?.vodPlayList?.size}), 走剧名反查: ${item.vodName}")
-                SusouApi.fetchDetailByKeyword(item.vodName)
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("SusouVM", "resolveDetail 整体失败", e)
-            null
-        }
-    }
-
-    private fun buildDetail(
-        item: SusouVideoItem,
-        name: String,
-        pic: String,
-        remarks: String,
-        playList: List<com.momo.app.data.susou.RbotvPlayList>
-    ): Pair<VideoItem, List<VideoSource>>? {
-        val sources = playList.mapNotNull { pl ->
-            val parseUrls = pl.parseUrls
-            val eps = pl.urls.mapNotNull { ep ->
-                val url = ep.url.trim()
-                when {
-                    url.isBlank() -> null
-                    // NBY 加密地址: 保留原串 + 附带解密接口前缀, 播放时懒解密
-                    url.startsWith("NBY-") -> Episode(name = ep.name, url = url, parseUrls = parseUrls)
-                    url.startsWith("http") -> Episode(name = ep.name, url = url)
-                    else -> null
-                }
-            }
-            if (eps.isEmpty()) null else VideoSource(label = friendlySourceName(pl.flag, pl.name), episodes = eps)
-        }
-        if (sources.isEmpty()) return null
-        val video = VideoItem(
-            id = item.vodId,
-            name = name.ifBlank { item.vodName },
-            pic = pic.ifBlank { item.vodPic },
-            remarks = remarks.ifBlank { item.vodRemarks },
-            typeName = "速搜",
-            actor = item.vodActor,
-            year = item.vodYear
-        )
-        return video to sources
+        return SusouApi.resolveDetail(item)
     }
 }
