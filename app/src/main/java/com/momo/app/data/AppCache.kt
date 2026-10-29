@@ -68,6 +68,36 @@ object AppCache {
         appContext = context.applicationContext
     }
 
+    /**
+     * 登录态变化（登录成功/登出/会话过期）后清空媒体相关缓存。
+     * NSFW 等内容的可见性随登录态变化，旧的列表/分类/详情/搜索索引必须作废后重拉。
+     */
+    fun clearMediaCaches() {
+        synchronized(lock) {
+            categories = emptyList()
+            homeMovies = emptyList()
+            homeTvSeries = emptyList()
+            homeAnime = emptyList()
+            homeVariety = emptyList()
+            homeBanners = emptyList()
+            homeLoaded = false
+            videoListCache.clear()
+            videoDetailCache.clear()
+            categoryViewStateSaved = false
+            categoryLastMainCategoryId = 0
+            categoryLastGenreId = 0
+            categoryLastGenreName = "全部"
+            categoryLastSubCategories = emptyList()
+            searchNames.clear()
+            searchPics.clear()
+        }
+        try {
+            val ctx = appContext ?: return
+            File(ctx.filesDir, "search_index.json").delete()
+            File(ctx.filesDir, "search_index_meta.json").delete()
+        } catch (_: Exception) { }
+    }
+
     fun addToSearchIndex(videos: List<VideoItem>) {
         for (v in videos) {
             if (v.name.isNotBlank()) {

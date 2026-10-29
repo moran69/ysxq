@@ -8,6 +8,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
 data class CategoryState(
@@ -41,6 +42,15 @@ class CategoryViewModel : ViewModel() {
 
     init {
         loadCategoriesAndFilters()
+        // 登录态变化后清缓存重拉（NSFW 等分类可见性随登录态变化）
+        viewModelScope.launch {
+            com.momo.app.data.auth.AuthRepository.authStateChanges().drop(1).collect {
+                AppCache.clearMediaCaches()
+                categoriesLoaded = false
+                _state.value = CategoryState()
+                loadCategoriesAndFilters()
+            }
+        }
     }
 
     /** 从首页/外部跳转时设置初始分类（自动解析子分类到父级主分类） */

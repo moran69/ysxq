@@ -3,10 +3,12 @@ package com.momo.app.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.momo.app.data.*
+import com.momo.app.data.auth.AuthRepository
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.awaitAll
 
@@ -30,6 +32,14 @@ class HomeViewModel : ViewModel() {
 
     init {
         loadHome()
+        // 登录态变化（登录成功/登出/启动时会话恢复完成）后清缓存重拉，
+        // NSFW 等登录态相关内容的可见性即时生效（drop(1)：跳过初始值，仅响应变化）
+        viewModelScope.launch {
+            AuthRepository.authStateChanges().drop(1).collect {
+                AppCache.clearMediaCaches()
+                loadHome(forceRefresh = true)
+            }
+        }
     }
 
     fun loadHome(forceRefresh: Boolean = false) {
