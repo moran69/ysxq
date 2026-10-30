@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit
 
 object NetworkModule {
 
-    private const val BASE_URL = "http://161.118.252.183:8899/"
+    private const val BASE_URL = "https://maccms.7998888.xyz/"
 
     private val json = Json {
         ignoreUnknownKeys = true

@@ -56,7 +56,7 @@ cat > "${RELEASE_DIR}/update.json" << EOF
 {
   "versionName": "${VERSION_NAME}",
   "versionCode": ${VERSION_CODE},
-  "apkUrl": "http://161.118.252.183/release/latest.apk",
+  "apkUrl": "https://momo.7998888.xyz/release/latest.apk",
   "apkSize": ${APK_SIZE},
   "md5": "${APK_MD5}",
   "forceUpdate": false,
@@ -70,5 +70,5 @@ cat "${RELEASE_DIR}/update.json"
 
 echo ""
 echo "=== 发布完成 ==="
-echo "下载地址: http://161.118.252.183:8899/release/latest.apk"
-echo "版本信息: http://161.118.252.183:8899/release/update.json"
+echo "下载地址: https://momo.7998888.xyz/release/latest.apk"
+echo "版本信息: https://momo.7998888.xyz/release/update.json"

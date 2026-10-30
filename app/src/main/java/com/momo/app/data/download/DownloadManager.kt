@@ -47,7 +47,7 @@ object DownloadManager {
         .connectionPool(okhttp3.ConnectionPool(MAX_CONCURRENT, 5, TimeUnit.MINUTES))
         .addInterceptor { chain ->
             val request = chain.request().newBuilder()
-                .addHeader("Referer", "http://161.118.252.183:8899/")
+                .addHeader("Referer", "https://maccms.7998888.xyz/")
                 .addHeader("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36")
                 .build()
             chain.proceed(request)

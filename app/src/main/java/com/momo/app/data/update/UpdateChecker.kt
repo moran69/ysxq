@@ -29,7 +29,7 @@ data class AppVersionInfo(
 class UpdateChecker {
     companion object {
         private const val TAG = "UpdateChecker"
-        private const val UPDATE_URL = "http://161.118.252.183/update.json"
+        private const val UPDATE_URL = "https://momo.7998888.xyz/update.json"
 
         private val client = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)

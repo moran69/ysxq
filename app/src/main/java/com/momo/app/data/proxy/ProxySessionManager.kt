@@ -29,7 +29,7 @@ class ProxySessionManager {
     private val TAG = "ProxySessionManager"
     private val sessions = mutableMapOf<String, ProxySession>()
     private val client: OkHttpClient
-    private val BASE_URL = "http://161.118.252.183:8899/"
+    private val BASE_URL = "https://maccms.7998888.xyz/"
 
     init {
         client = OkHttpClient.Builder()

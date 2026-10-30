@@ -50,14 +50,14 @@ fun LzOAuthScreen(
     var oauthDone by remember { mutableStateOf(false) }
 
     // 苹果CMS 的 L 站授权入口（302 → connect.linux.do）
-    val oauthUrl = "http://161.118.252.183:8899/user/oauth.html?type=lz"
+    val oauthUrl = "https://maccms.7998888.xyz/user/oauth.html?type=lz"
     // 授权成功后网站端跳转的目标页面（含 user/index 即视为登录成功）
     val successMarkers = listOf("user/index", "index.php/user/index", "user/index.html")
 
     LaunchedEffect(oauthDone) {
         if (!oauthDone) return@LaunchedEffect
         authError = null
-        val cookies = CookieManager.getInstance().getCookie("http://161.118.252.183:8899/") ?: ""
+        val cookies = CookieManager.getInstance().getCookie("https://maccms.7998888.xyz/") ?: ""
         if (cookies.isBlank()) {
             authError = "未获取到登录状态，请重试"
             oauthDone = false

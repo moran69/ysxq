@@ -237,7 +237,7 @@ fun DetailScreen(
         OkHttpDataSource.Factory(streamClient)
             .setUserAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
             .setDefaultRequestProperties(mapOf(
-                "Referer" to "http://161.118.252.183:8899/"
+                "Referer" to "https://maccms.7998888.xyz/"
             ))
     }
     val dataSourceFactory = remember { DefaultDataSource.Factory(context, httpDataSourceFactory) }

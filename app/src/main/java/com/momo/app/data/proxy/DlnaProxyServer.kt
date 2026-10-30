@@ -28,7 +28,7 @@ class DlnaProxyServer(port: Int = 0) : NanoHTTPD(port) {
             "DLNA.ORG_OP=11;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
         private const val DLNA_PLAYLIST_CONTENT_FEATURES =
             "DLNA.ORG_OP=11;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=81700000000000000000000000000000"
-        private const val BASE_URL = "http://161.118.252.183:8899/"
+        private const val BASE_URL = "https://maccms.7998888.xyz/"
         private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
         private const val PREFETCH_AHEAD = 50
         private const val CONCURRENT_DOWNLOADS = 3
